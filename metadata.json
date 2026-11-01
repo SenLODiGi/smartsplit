@@ -1,0 +1,8 @@
+{
+  "name": "SmartSplit — Smart Expense Splitter with OCR & Debt Optimization",
+  "description": "Complete group expense splitting solution featuring OCR receipt scanning with line-item assignment, fair split calculations, graph-based debt minimization, and settlement workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

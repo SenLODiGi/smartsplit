@@ -28,6 +28,7 @@ export const ReceiptPipelinePage: React.FC = () => {
     activeGroup,
     createExpense,
     currentUser,
+    showToast,
   } = useApp();
 
   const navigate = useNavigate();
@@ -39,6 +40,7 @@ export const ReceiptPipelinePage: React.FC = () => {
   const [serviceCharge, setServiceCharge] = useState<number>(0);
   const [taxAmount, setTaxAmount] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [receiptPayerId, setReceiptPayerId] = useState<string>(currentUser.id);
 
   // Sync review state when receipt data arrives
   React.useEffect(() => {
@@ -182,7 +184,7 @@ export const ReceiptPipelinePage: React.FC = () => {
       amount: grandTotal,
       currency: activeGroup.currency,
       category: 'food',
-      payerId: currentUser.id,
+      payerId: receiptPayerId || currentUser.id,
       date: receiptDate || new Date().toISOString().slice(0, 10),
       splitMethod: 'items',
       splits: finalSplits,
@@ -636,7 +638,32 @@ export const ReceiptPipelinePage: React.FC = () => {
                 Back
               </button>
               <button
-                onClick={() => setActiveOCR((prev: any) => ({ ...prev, step: 'assignment' }))}
+                onClick={() => {
+                const allMemberIds = activeGroup?.members.map((m) => m.userId) || [currentUser.id];
+                const updatedAssignments = { ...activeOCR.assignments };
+                itemsList.forEach((item) => {
+                  if (!updatedAssignments[item.id] || updatedAssignments[item.id].length === 0) {
+                    updatedAssignments[item.id] = [...allMemberIds];
+                  }
+                });
+                setActiveOCR((prev: any) => ({
+                  ...prev,
+                  step: 'assignment',
+                  assignments: updatedAssignments,
+                  receiptData: prev.receiptData
+                    ? {
+                        ...prev.receiptData,
+                        merchant: merchantName,
+                        date: receiptDate,
+                        items: itemsList,
+                        serviceCharge,
+                        tax: taxAmount,
+                        subtotal: itemsSubtotal,
+                        total: grandTotal,
+                      }
+                    : null,
+                }));
+              }}
                 className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs"
               >
                 <span>Proceed to Member Assignment</span>
@@ -740,7 +767,19 @@ export const ReceiptPipelinePage: React.FC = () => {
                 Back
               </button>
               <button
-                onClick={() => setActiveOCR((prev: any) => ({ ...prev, step: 'summary' }))}
+                onClick={() => {
+                const unassignedItems = itemsList.filter(
+                  (item) => (activeOCR.assignments[item.id] || []).length === 0
+                );
+                if (unassignedItems.length > 0) {
+                  showToast(
+                    `"${unassignedItems[0].name}" has no diners assigned. Please assign all dishes before finalizing.`,
+                    'warning'
+                  );
+                  return;
+                }
+                setActiveOCR((prev: any) => ({ ...prev, step: 'summary' }));
+              }}
                 className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs"
               >
                 <span>View Final Split Summary</span>
@@ -803,12 +842,32 @@ export const ReceiptPipelinePage: React.FC = () => {
               })}
             </div>
 
+            
+            {/* Payer Selection */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl mb-4">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                Who Paid This Bill?
+              </label>
+              <select
+                value={receiptPayerId}
+                onChange={(e) => setReceiptPayerId(e.target.value)}
+                className="w-full text-xs p-2.5 bg-white border border-slate-200 rounded-xl font-medium"
+              >
+                {activeGroup?.members.map((m) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.name} {m.userId === currentUser.id ? '(You)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Bill Summary Banner */}
+
             <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs mb-6">
               <div>
                 <span className="font-bold text-indigo-950 block">Ready to record this expense?</span>
                 <span className="text-indigo-800 text-[11px]">
-                  Will be saved under "{activeGroup?.name}" with {currentUser.name} as payer.
+                  Will be saved under "{activeGroup?.name}" with {activeGroup?.members.find((m) => m.userId === receiptPayerId)?.name || currentUser.name} as payer.
                 </span>
               </div>
               <div className="text-right">

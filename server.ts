@@ -571,7 +571,7 @@ function calculateGroupBalancesAndOptimization(groupId: string): SettlementAnaly
     if (creditor.amount < 0.01) cIdx++;
   }
 
-  const rawCount = Math.max(simulatedRawDebts, optimizedTransfers.length + 3);
+  const rawCount = simulatedRawDebts > 0 ? Math.max(simulatedRawDebts, optimizedTransfers.length) : 0;
   const optimizedCount = optimizedTransfers.length;
   const savings = rawCount > 0 ? Math.round(((rawCount - optimizedCount) / rawCount) * 100) : 0;
 
@@ -691,7 +691,7 @@ app.post('/api/groups', (req, res) => {
     memberNames.forEach((mName: string, idx: number) => {
       if (mName && mName.trim() && mName.trim() !== currentUser.name) {
         const id = `usr_custom_${Date.now()}_${idx}`;
-        const initials = mName.trim().split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+        const initials = mName.trim().split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
         newMembers.push({
           id,
           userId: id,
@@ -756,6 +756,63 @@ app.get('/api/groups/:groupId', (req, res) => {
     analysis,
   });
 });
+// Edit Group
+app.put('/api/groups/:groupId', (req, res) => {
+  const group = groups.find((g) => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { name, description, category, currency } = req.body;
+  if (name && name.trim()) group.name = name.trim();
+  if (description !== undefined) group.description = description.trim();
+  if (category) group.category = category;
+  if (currency) group.currency = currency.toUpperCase();
+  res.json({ success: true, group });
+});
+
+// Delete Group
+app.delete('/api/groups/:groupId', (req, res) => {
+  const index = groups.findIndex((g) => g.id === req.params.groupId);
+  if (index === -1) return res.status(404).json({ error: 'Group not found' });
+  const [deletedGroup] = groups.splice(index, 1);
+  for (let i = expenses.length - 1; i >= 0; i--) {
+    if (expenses[i].groupId === req.params.groupId) expenses.splice(i, 1);
+  }
+  for (let i = settlements.length - 1; i >= 0; i--) {
+    if (settlements[i].groupId === req.params.groupId) settlements.splice(i, 1);
+  }
+  res.json({ success: true, group: deletedGroup });
+});
+
+// Remove Member from Group
+app.delete('/api/groups/:groupId/members/:memberId', (req, res) => {
+  const group = groups.find((g) => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const memberIndex = group.members.findIndex(
+    (m) => m.userId === req.params.memberId || m.id === req.params.memberId
+  );
+  if (memberIndex === -1) return res.status(404).json({ error: 'Member not found' });
+  const member = group.members[memberIndex];
+  if (member.userId === currentUser.id && group.members.length > 1) {
+    return res.status(400).json({ error: 'Cannot remove group admin while other members exist' });
+  }
+  const analysis = calculateGroupBalancesAndOptimization(group.id);
+  const memberBal = analysis.netBalances.find((b) => b.userId === member.userId);
+  if (memberBal && Math.abs(memberBal.balance) > 0.05) {
+    return res.status(400).json({
+      error: `Cannot remove member with outstanding balance of Rs. ${Math.abs(memberBal.balance)}. Please settle debts first.`,
+    });
+  }
+  group.members.splice(memberIndex, 1);
+  activities.unshift({
+    id: `act_${Date.now()}`,
+    groupId: group.id,
+    type: 'member_added',
+    actorName: currentUser.name,
+    description: `removed ${member.name} from the group`,
+    timestamp: new Date().toISOString(),
+  });
+  res.json({ success: true, member, group });
+});
+
 
 app.post('/api/groups/:groupId/members', (req, res) => {
   const group = groups.find((g) => g.id === req.params.groupId);
@@ -888,6 +945,28 @@ app.delete('/api/expenses/:expenseId', (req, res) => {
   const [removed] = expenses.splice(index, 1);
   res.json({ success: true, removedExpense: removed });
 });
+// Edit Expense
+app.put('/api/expenses/:expenseId', (req, res) => {
+  const expense = expenses.find((e) => e.id === req.params.expenseId);
+  if (!expense) return res.status(404).json({ error: 'Expense not found' });
+  const { title, amount, category, payerId, date, splitMethod, splits, items, notes } = req.body;
+  if (title) expense.title = title.trim();
+  if (amount && Number(amount) > 0) expense.amount = Number(amount);
+  if (category) expense.category = category;
+  if (payerId) {
+    expense.payerId = payerId;
+    const group = groups.find((g) => g.id === expense.groupId);
+    const payerMember = group?.members.find((m) => m.userId === payerId);
+    if (payerMember) expense.payerName = payerMember.name;
+  }
+  if (date) expense.date = date;
+  if (splitMethod) expense.splitMethod = splitMethod;
+  if (splits && Array.isArray(splits)) expense.splits = splits;
+  if (items) expense.items = items;
+  if (notes !== undefined) expense.notes = notes;
+  res.json({ success: true, expense });
+});
+
 
 // Group Balances and Optimization
 app.get('/api/groups/:groupId/balances', (req, res) => {
@@ -1001,6 +1080,45 @@ app.patch('/api/notifications/:notificationId/read', (req, res) => {
   if (notif) notif.read = true;
   res.json({ success: true, notification: notif });
 });
+// Mark All Notifications Read
+app.post('/api/notifications/read-all', (_req, res) => {
+  notifications.forEach((n: NotificationItem) => { n.read = true; });
+  res.json({ success: true, count: notifications.length });
+});
+
+// Get Settlements
+app.get('/api/settlements', (req, res) => {
+  const { groupId } = req.query;
+  if (groupId) {
+    return res.json({ settlements: settlements.filter((s) => s.groupId === groupId) });
+  }
+  res.json({ settlements });
+});
+
+// Update Profile
+app.patch('/api/users/profile', (req, res) => {
+  const { name, email } = req.body;
+  if (name && name.trim()) {
+    currentUser.name = name.trim();
+    currentUser.initials = name.trim().split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+    for (const g of groups) {
+      const m = g.members.find((mem) => mem.userId === currentUser.id);
+      if (m) {
+        m.name = currentUser.name;
+        m.initials = currentUser.initials;
+      }
+    }
+  }
+  if (email && email.trim()) {
+    currentUser.email = email.trim();
+    for (const g of groups) {
+      const m = g.members.find((mem) => mem.userId === currentUser.id);
+      if (m) m.email = currentUser.email;
+    }
+  }
+  res.json({ success: true, user: currentUser });
+});
+
 
 // ==========================================
 // Gemini 2.5 Flash OCR Receipt Pipeline

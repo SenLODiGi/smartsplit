@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RotateCcw, Check, User, Globe, Shield, Sparkles } from 'lucide-react';
+import { RotateCcw, Check, User, Globe, Sparkles, AlertTriangle, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const SettingsPage: React.FC = () => {
@@ -8,13 +8,18 @@ export const SettingsPage: React.FC = () => {
     preferredCurrency,
     setPreferredCurrency,
     resetDemoDatabase,
+    updateCurrentUserProfile,
+    showToast,
   } = useApp();
 
-  const [savedSuccess, setSavedSuccess] = useState(false);
-  const [resetSuccess, setResetSuccess] = useState(false);
+  const [displayName, setDisplayName] = useState(currentUser.name);
+  const [emailAddress, setEmailAddress] = useState(currentUser.email);
+
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [testPrompt, setTestPrompt] = useState('Explain how AI works in a few words');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testingApi, setTestingApi] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleTestGemini = async () => {
     try {
@@ -34,18 +39,23 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
+    if (!displayName.trim()) {
+      showToast('Display name cannot be empty.', 'error');
+      return;
+    }
+    setIsSaving(true);
+    await updateCurrentUserProfile({
+      name: displayName.trim(),
+      email: emailAddress.trim(),
+    });
+    setIsSaving(false);
   };
 
-  const handleReset = async () => {
-    if (confirm('Reset all demo groups, bills, and settlements to initial state?')) {
-      await resetDemoDatabase();
-      setResetSuccess(true);
-      setTimeout(() => setResetSuccess(false), 2500);
-    }
+  const handleResetConfirm = async () => {
+    await resetDemoDatabase();
+    setShowResetConfirm(false);
   };
 
   return (
@@ -72,7 +82,9 @@ export const SettingsPage: React.FC = () => {
               <label className="block font-semibold text-slate-700 mb-1">Display Name</label>
               <input
                 type="text"
-                defaultValue={currentUser.name}
+                required
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -80,7 +92,8 @@ export const SettingsPage: React.FC = () => {
               <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
               <input
                 type="email"
-                defaultValue={currentUser.email}
+                value={emailAddress}
+                onChange={(e) => setEmailAddress(e.target.value)}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -104,10 +117,13 @@ export const SettingsPage: React.FC = () => {
               <button
                 key={c.code}
                 type="button"
-                onClick={() => setPreferredCurrency(c.code)}
+                onClick={() => {
+                  setPreferredCurrency(c.code);
+                  showToast(`Default currency set to ${c.code}`, 'info');
+                }}
                 className={`p-3 rounded-xl border text-center transition-all ${
                   preferredCurrency === c.code
-                    ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-bold'
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-bold shadow-xs'
                     : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                 }`}
               >
@@ -155,7 +171,7 @@ export const SettingsPage: React.FC = () => {
             {testResult && (
               <div className="p-3 bg-white rounded-lg border border-indigo-100 text-xs">
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                  <span className="font-semibold text-indigo-600">Gemini Response (gemini-3.8-flash)</span>
+                  <span className="font-semibold text-indigo-600">Gemini Response</span>
                   <span>Status: 200 OK</span>
                 </div>
                 <p className="text-slate-800 leading-relaxed font-mono text-[11px]">
@@ -178,38 +194,56 @@ export const SettingsPage: React.FC = () => {
 
           <button
             type="button"
-            onClick={handleReset}
+            onClick={() => setShowResetConfirm(true)}
             className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset Demo Database</span>
           </button>
-          {resetSuccess && (
-            <p className="text-xs text-emerald-600 font-semibold mt-2">
-              Database successfully reset to clean seed data!
-            </p>
-          )}
         </div>
 
         {/* Save button */}
-        <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-          {savedSuccess ? (
-            <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
-              <Check className="w-4 h-4" />
-              <span>Preferences saved!</span>
-            </span>
-          ) : (
-            <span />
-          )}
-
+        <div className="pt-4 border-t border-slate-100 flex items-center justify-end">
           <button
             type="submit"
-            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+            disabled={isSaving}
+            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
           >
-            Save Preferences
+            {isSaving ? 'Saving...' : 'Save Preferences'}
           </button>
         </div>
       </form>
+
+      {/* Confirmation Modal for Reset Demo */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">Reset Demo Data?</h3>
+            <p className="text-xs text-slate-500 mb-5 leading-relaxed">
+              This will restore the original demo groups, expenses, and settlements. Any custom bills created during this session will be reset.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleResetConfirm}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs"
+              >
+                Confirm Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

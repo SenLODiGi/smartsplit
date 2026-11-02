@@ -16,7 +16,7 @@ import {
 import { useApp } from '../../context/AppContext';
 
 export const Sidebar: React.FC = () => {
-  const { groups, currentGroupId, setCurrentGroupId, activeGroup, currentUser } = useApp();
+  const { groups, currentGroupId, setCurrentGroupId, currentUser } = useApp();
   const navigate = useNavigate();
 
   const navItems = [
@@ -119,15 +119,19 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* User Profile Footer */}
-      <div className="p-3 border-t border-slate-800 flex items-center gap-3 bg-slate-900/50">
-        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-indigo-500/30">
+      <NavLink
+        to="/settings"
+        className="p-3 border-t border-slate-800 flex items-center gap-3 bg-slate-900/50 hover:bg-slate-800/80 transition-colors cursor-pointer"
+        title="Settings & Profile"
+      >
+        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-indigo-500/30 shrink-0">
           {currentUser.initials}
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-xs font-medium text-white truncate">{currentUser.name}</p>
           <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
         </div>
-      </div>
+      </NavLink>
     </aside>
   );
 };

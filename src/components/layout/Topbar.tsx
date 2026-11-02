@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Bell,
@@ -7,6 +7,7 @@ import {
   RotateCcw,
   ExternalLink,
   Check,
+  CheckCheck,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -17,13 +18,31 @@ export const Topbar: React.FC = () => {
     preferredCurrency,
     setPreferredCurrency,
     markNotificationRead,
+    markAllNotificationsRead,
     resetDemoDatabase,
   } = useApp();
 
   const [showNotifMenu, setShowNotifMenu] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  // Close notifications menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+        setShowNotifMenu(false);
+      }
+    };
+
+    if (showNotifMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showNotifMenu]);
 
   return (
     <header className="h-16 bg-white border-b border-slate-200 px-4 lg:px-6 flex items-center justify-between gap-4 sticky top-0 z-20">
@@ -85,11 +104,12 @@ export const Topbar: React.FC = () => {
         </button>
 
         {/* Notifications Popover */}
-        <div className="relative">
+        <div className="relative" ref={notifRef}>
           <button
             onClick={() => setShowNotifMenu(!showNotifMenu)}
             className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors relative"
             title="Notifications"
+            aria-label="View notifications"
           >
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
@@ -98,16 +118,27 @@ export const Topbar: React.FC = () => {
           </button>
 
           {showNotifMenu && (
-            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-slate-200 p-3 z-30">
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-30 animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
                 <span className="text-xs font-bold text-slate-900">Notifications</span>
-                <span className="text-[11px] text-slate-500">{unreadCount} unread</span>
+                <div className="flex items-center gap-2">
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={markAllNotificationsRead}
+                      className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
+                    >
+                      <CheckCheck className="w-3 h-3" />
+                      <span>Mark all read</span>
+                    </button>
+                  )}
+                  <span className="text-[11px] text-slate-400">({unreadCount} unread)</span>
+                </div>
               </div>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+              <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {notifications.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-3 text-center">No notifications yet.</p>
+                  <p className="text-xs text-slate-400 py-4 text-center">No notifications yet.</p>
                 ) : (
-                  notifications.map((n) => (
+                  notifications.slice(0, 8).map((n) => (
                     <div
                       key={n.id}
                       onClick={() => markNotificationRead(n.id)}
@@ -124,6 +155,15 @@ export const Topbar: React.FC = () => {
                   ))
                 )}
               </div>
+              <div className="pt-2 mt-2 border-t border-slate-100 text-center">
+                <Link
+                  to="/notifications"
+                  onClick={() => setShowNotifMenu(false)}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold"
+                >
+                  View all activity notifications →
+                </Link>
+              </div>
             </div>
           )}
         </div>
@@ -133,6 +173,7 @@ export const Topbar: React.FC = () => {
           onClick={resetDemoDatabase}
           className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
           title="Reset Demo Data"
+          aria-label="Reset demo data"
         >
           <RotateCcw className="w-4 h-4" />
         </button>

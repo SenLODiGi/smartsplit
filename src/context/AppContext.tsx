@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import {
   User,
   Group,
@@ -9,6 +9,7 @@ import {
   OCRResult,
   SettlementAnalysis,
 } from '../types';
+import { ToastItem, ToastContainer } from '../components/common/ToastContainer';
 
 interface AppContextType {
   currentUser: User;
@@ -28,11 +29,17 @@ interface AppContextType {
   isLoading: boolean;
   refreshData: () => Promise<void>;
   createGroup: (data: { name: string; description?: string; currency?: string; category?: any; memberNames?: string[] }) => Promise<Group | null>;
+  updateGroup: (groupId: string, data: { name?: string; description?: string; currency?: string; category?: any }) => Promise<Group | null>;
+  deleteGroup: (groupId: string) => Promise<boolean>;
   addMemberToGroup: (groupId: string, name: string, email?: string) => Promise<boolean>;
+  removeMemberFromGroup: (groupId: string, memberId: string) => Promise<{ success: boolean; error?: string }>;
   createExpense: (expenseData: any) => Promise<Expense | null>;
+  updateExpense: (expenseId: string, expenseData: any) => Promise<Expense | null>;
   deleteExpense: (expenseId: string) => Promise<boolean>;
   recordSettlement: (paymentData: any) => Promise<SettlementPayment | null>;
   getGroupOptimization: (groupId: string) => Promise<SettlementAnalysis | null>;
+  getSettlements: (groupId?: string) => Promise<SettlementPayment[]>;
+  updateCurrentUserProfile: (data: { name?: string; email?: string }) => Promise<boolean>;
   // OCR Receipt pipeline state & actions
   activeOCR: {
     step: 'upload' | 'processing' | 'raw_review' | 'corrected_review' | 'assignment' | 'summary';
@@ -44,7 +51,12 @@ interface AppContextType {
   processOCR: (imageBase64?: string, preset?: string) => Promise<OCRResult | null>;
   resetOCR: () => void;
   markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
   resetDemoDatabase: () => Promise<void>;
+  // Global Toast System
+  toasts: ToastItem[];
+  showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info', duration?: number) => void;
+  dismissToast: (id: string) => void;
 }
 
 const defaultUser: User = {
@@ -68,6 +80,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [preferredCurrency, setPreferredCurrency] = useState<string>('LKR');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  // Toast dispatch
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', duration: number = 4000) => {
+      const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newToast: ToastItem = { id, message, type, duration };
+      setToasts((prev) => [...prev.slice(-4), newToast]); // keep at most 5 toasts
+
+      if (duration > 0) {
+        setTimeout(() => {
+          dismissToast(id);
+        }, duration);
+      }
+    },
+    [dismissToast]
+  );
 
   // Active OCR flow state
   const [activeOCR, setActiveOCR] = useState<{
@@ -87,10 +120,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const refreshData = async () => {
     try {
       setIsLoading(true);
-      const [groupsRes, historyRes, notifsRes] = await Promise.all([
-        fetch('/api/groups').then((r) => r.ok ? r.json() : { groups: [] }),
-        fetch('/api/history').then((r) => r.ok ? r.json() : { activities: [] }),
-        fetch('/api/notifications').then((r) => r.ok ? r.json() : { notifications: [] }),
+      const [groupsRes, historyRes, notifsRes, stlRes] = await Promise.all([
+        fetch('/api/groups').then((r) => (r.ok ? r.json() : { groups: [] })),
+        fetch('/api/history').then((r) => (r.ok ? r.json() : { activities: [] })),
+        fetch('/api/notifications').then((r) => (r.ok ? r.json() : { notifications: [] })),
+        fetch('/api/settlements').then((r) => (r.ok ? r.json() : { settlements: [] })),
       ]);
 
       if (groupsRes.groups && groupsRes.groups.length > 0) {
@@ -108,10 +142,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setNotifications(notifsRes.notifications);
       }
 
+      if (stlRes.settlements) {
+        setSettlements(stlRes.settlements);
+      }
+
       // Fetch expenses for the current active group
       const targetGroupId = currentGroupId || (groupsRes.groups?.[0]?.id ?? 'grp_ella_weekend');
       if (targetGroupId) {
-        const expRes = await fetch(`/api/groups/${targetGroupId}/expenses`).then((r) => r.ok ? r.json() : { expenses: [] });
+        const expRes = await fetch(`/api/groups/${targetGroupId}/expenses`).then((r) =>
+          r.ok ? r.json() : { expenses: [] }
+        );
         if (expRes.expenses) {
           setExpenses(expRes.expenses);
         }
@@ -138,8 +178,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [currentGroupId]);
 
-  const login = () => setIsAuthenticated(true);
-  const logout = () => setIsAuthenticated(false);
+  const login = () => {
+    setIsAuthenticated(true);
+    showToast(`Welcome back, ${currentUser.name}!`, 'success');
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    showToast('You have been logged out.', 'info');
+  };
 
   const createGroup = async (data: {
     name: string;
@@ -158,12 +205,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const json = await res.json();
         await refreshData();
         setCurrentGroupId(json.group.id);
+        showToast(`Group "${json.group.name}" created successfully!`, 'success');
         return json.group;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        showToast(errJson.error || 'Failed to create group. Please check fields.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create group:', err);
+      showToast(err.message || 'Network error while creating group.', 'error');
     }
     return null;
+  };
+
+  const updateGroup = async (
+    groupId: string,
+    data: { name?: string; description?: string; currency?: string; category?: any }
+  ): Promise<Group | null> => {
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        await refreshData();
+        showToast('Group details updated successfully!', 'success');
+        return json.group;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to update group.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to update group:', err);
+      showToast(err.message || 'Error updating group.', 'error');
+    }
+    return null;
+  };
+
+  const deleteGroup = async (groupId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshData();
+        showToast('Group deleted successfully.', 'info');
+        return true;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to delete group.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to delete group:', err);
+      showToast(err.message || 'Error deleting group.', 'error');
+    }
+    return false;
   };
 
   const addMemberToGroup = async (groupId: string, name: string, email?: string): Promise<boolean> => {
@@ -175,12 +271,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       if (res.ok) {
         await refreshData();
+        showToast(`${name} added to the group!`, 'success');
         return true;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to add member.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to add member:', err);
+      showToast(err.message || 'Network error adding member.', 'error');
     }
     return false;
+  };
+
+  const removeMemberFromGroup = async (groupId: string, memberId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`/api/groups/${groupId}/members/${memberId}`, { method: 'DELETE' });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await refreshData();
+        showToast('Member removed from group.', 'info');
+        return { success: true };
+      } else {
+        const errMsg = json.error || 'Could not remove member.';
+        showToast(errMsg, 'error');
+        return { success: false, error: errMsg };
+      }
+    } catch (err: any) {
+      console.error('Failed to remove member:', err);
+      showToast(err.message || 'Error removing member.', 'error');
+      return { success: false, error: err.message };
+    }
   };
 
   const createExpense = async (expenseData: any): Promise<Expense | null> => {
@@ -196,10 +317,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (res.ok) {
         const json = await res.json();
         await refreshData();
+        showToast(`Expense "${json.expense.title}" added and split!`, 'success');
         return json.expense;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to save expense. Please verify fields.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create expense:', err);
+      showToast(err.message || 'Network error saving expense.', 'error');
+    }
+    return null;
+  };
+
+  const updateExpense = async (expenseId: string, expenseData: any): Promise<Expense | null> => {
+    try {
+      const res = await fetch(`/api/expenses/${expenseId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(expenseData),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        await refreshData();
+        showToast(`Expense "${json.expense.title}" updated successfully!`, 'success');
+        return json.expense;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to update expense.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to update expense:', err);
+      showToast(err.message || 'Error updating expense.', 'error');
     }
     return null;
   };
@@ -209,10 +358,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch(`/api/expenses/${expenseId}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshData();
+        showToast('Expense deleted successfully.', 'info');
         return true;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to delete expense.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete expense:', err);
+      showToast(err.message || 'Error deleting expense.', 'error');
     }
     return false;
   };
@@ -230,10 +384,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (res.ok) {
         const json = await res.json();
         await refreshData();
+        showToast(`Settlement recorded! ${json.payment.payerName} → ${json.payment.payeeName}`, 'success');
         return json.payment;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to record settlement.', 'error');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to record settlement:', err);
+      showToast(err.message || 'Error recording settlement.', 'error');
     }
     return null;
   };
@@ -248,6 +407,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.error('Failed to fetch group optimization:', err);
     }
     return null;
+  };
+
+  const getSettlements = async (groupId?: string): Promise<SettlementPayment[]> => {
+    try {
+      const url = groupId ? `/api/settlements?groupId=${groupId}` : '/api/settlements';
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = await res.json();
+        return json.settlements || [];
+      }
+    } catch (err) {
+      console.error('Failed to fetch settlements:', err);
+    }
+    return [];
+  };
+
+  const updateCurrentUserProfile = async (data: { name?: string; email?: string }): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/users/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setCurrentUser(json.user);
+        await refreshData();
+        showToast('Profile updated successfully!', 'success');
+        return true;
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to update profile.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to update profile:', err);
+      showToast(err.message || 'Error updating profile.', 'error');
+    }
+    return false;
   };
 
   const processOCR = async (imageBase64?: string, preset?: string): Promise<OCRResult | null> => {
@@ -333,7 +530,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
 
-      if (!ocrResult) return null;
+      if (!ocrResult) {
+        showToast('Could not process receipt.', 'error');
+        return null;
+      }
 
       // Auto-assign items equally across all current group members initially
       const initialAssignments: Record<string, string[]> = {};
@@ -349,10 +549,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         assignments: initialAssignments,
       });
 
+      showToast('Receipt parsed successfully!', 'success');
       return ocrResult;
-    } catch (err) {
+    } catch (err: any) {
       console.error('OCR analysis failed:', err);
       setActiveOCR((prev) => ({ ...prev, step: 'upload' }));
+      showToast(err.message || 'OCR processing failed.', 'error');
       return null;
     }
   };
@@ -377,12 +579,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const markAllNotificationsRead = async () => {
+    try {
+      await fetch('/api/notifications/read-all', { method: 'POST' });
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      showToast('All notifications marked as read.', 'info');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const resetDemoDatabase = async () => {
     try {
       await fetch('/api/seed/reset', { method: 'POST' });
       await refreshData();
+      showToast('Demo database reset to clean seed data.', 'success');
     } catch (err) {
       console.error(err);
+      showToast('Error resetting demo database.', 'error');
     }
   };
 
@@ -406,20 +620,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isLoading,
         refreshData,
         createGroup,
+        updateGroup,
+        deleteGroup,
         addMemberToGroup,
+        removeMemberFromGroup,
         createExpense,
+        updateExpense,
         deleteExpense,
         recordSettlement,
         getGroupOptimization,
+        getSettlements,
+        updateCurrentUserProfile,
         activeOCR,
         setActiveOCR,
         processOCR,
         resetOCR,
         markNotificationRead,
+        markAllNotificationsRead,
         resetDemoDatabase,
+        toasts,
+        showToast,
+        dismissToast,
       }}
     >
       {children}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </AppContext.Provider>
   );
 };

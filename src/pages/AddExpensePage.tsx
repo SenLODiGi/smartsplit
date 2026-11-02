@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PlusCircle,
@@ -12,12 +12,13 @@ import {
   Check,
   AlertCircle,
   ArrowRight,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, getAvatarColor } from '../utils/formatters';
 
 export const AddExpensePage: React.FC = () => {
-  const { activeGroup, currentUser, createExpense } = useApp();
+  const { activeGroup, currentUser, createExpense, showToast } = useApp();
   const navigate = useNavigate();
 
   const [title, setTitle] = useState('');
@@ -29,61 +30,155 @@ export const AddExpensePage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Split details state per member
+  // Group members
   const members = activeGroup?.members || [];
-  const parsedAmount = Number(amount) || 0;
+  const parsedAmount = Math.max(0, Number(amount) || 0);
+
+  // Participants in equal split (which members are participating)
+  const [participatingUserIds, setParticipatingUserIds] = useState<string[]>([]);
 
   // Custom split values per member
   const [exactAmounts, setExactAmounts] = useState<Record<string, number>>({});
   const [percentages, setPercentages] = useState<Record<string, number>>({});
   const [sharesCount, setSharesCount] = useState<Record<string, number>>({});
 
-  // Initialize values when members load
-  React.useEffect(() => {
-    const initExact: Record<string, number> = {};
-    const initPct: Record<string, number> = {};
-    const initShares: Record<string, number> = {};
+  // Initialize values when activeGroup / members changes
+  useEffect(() => {
+    if (members.length > 0) {
+      setParticipatingUserIds(members.map((m) => m.userId));
 
-    const equalShare = members.length > 0 ? Math.round((parsedAmount / members.length) * 100) / 100 : 0;
-    const equalPct = members.length > 0 ? Math.round((100 / members.length) * 10) / 10 : 0;
+      const initExact: Record<string, number> = {};
+      const initPct: Record<string, number> = {};
+      const initShares: Record<string, number> = {};
 
-    members.forEach((m) => {
-      initExact[m.userId] = equalShare;
-      initPct[m.userId] = equalPct;
-      initShares[m.userId] = 1;
+      const equalShare = Math.round((parsedAmount / members.length) * 100) / 100;
+      const equalPct = Math.round((100 / members.length) * 10) / 10;
+
+      members.forEach((m) => {
+        initExact[m.userId] = equalShare;
+        initPct[m.userId] = equalPct;
+        initShares[m.userId] = 1;
+      });
+
+      setExactAmounts(initExact);
+      setPercentages(initPct);
+      setSharesCount(initShares);
+    }
+  }, [activeGroup?.id]);
+
+  // Quick helper to redistribute exact amounts evenly across members
+  const handleAutoDistributeExact = () => {
+    if (members.length === 0 || parsedAmount <= 0) return;
+    const share = Math.round((parsedAmount / members.length) * 100) / 100;
+    const newExact: Record<string, number> = {};
+    members.forEach((m, idx) => {
+      newExact[m.userId] = idx === 0 ? parsedAmount - share * (members.length - 1) : share;
     });
+    setExactAmounts(newExact);
+    showToast('Amounts evenly distributed!', 'info');
+  };
 
-    setExactAmounts(initExact);
-    setPercentages(initPct);
-    setSharesCount(initShares);
-  }, [activeGroup, parsedAmount]);
+  // Quick helper to redistribute percentages evenly
+  const handleAutoDistributePercentages = () => {
+    if (members.length === 0) return;
+    const basePct = Math.floor((100 / members.length) * 10) / 10;
+    const newPct: Record<string, number> = {};
+    let accumulated = 0;
+    members.forEach((m, idx) => {
+      if (idx === members.length - 1) {
+        newPct[m.userId] = Math.round((100 - accumulated) * 10) / 10;
+      } else {
+        newPct[m.userId] = basePct;
+        accumulated += basePct;
+      }
+    });
+    setPercentages(newPct);
+    showToast('Percentages evenly distributed!', 'info');
+  };
 
-  // Validation
-  const sumExact = Object.values(exactAmounts).reduce((a, b) => a + b, 0);
-  const sumPercentages = Object.values(percentages).reduce((a, b) => a + b, 0);
-  const sumShares = Object.values(sharesCount).reduce((a, b) => a + b, 0);
+  const toggleParticipant = (userId: string) => {
+    if (participatingUserIds.includes(userId)) {
+      if (participatingUserIds.length === 1) {
+        showToast('At least one member must participate in the expense.', 'warning');
+        return;
+      }
+      setParticipatingUserIds(participatingUserIds.filter((id) => id !== userId));
+    } else {
+      setParticipatingUserIds([...participatingUserIds, userId]);
+    }
+  };
+
+  // Computations & Validations
+  const sumExact = Object.values(exactAmounts).reduce((a, b) => a + Number(b || 0), 0);
+  const diffExact = Math.round((parsedAmount - sumExact) * 100) / 100;
+
+  const sumPercentages = Object.values(percentages).reduce((a, b) => a + Number(b || 0), 0);
+  const diffPercentages = Math.round((100 - sumPercentages) * 10) / 10;
+
+  const sumShares = Object.values(sharesCount).reduce((a, b) => a + Number(b || 0), 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || parsedAmount <= 0) return;
-    setIsSubmitting(true);
+
+    if (!title.trim()) {
+      showToast('Please enter an expense title.', 'error');
+      return;
+    }
+
+    if (parsedAmount <= 0) {
+      showToast('Expense amount must be greater than zero.', 'error');
+      return;
+    }
+
+    if (!activeGroup || members.length === 0) {
+      showToast('No active group or members found.', 'error');
+      return;
+    }
 
     let splits: any[] = [];
 
     if (splitMethod === 'equal') {
-      const share = Math.round((parsedAmount / members.length) * 100) / 100;
-      splits = members.map((m, idx) => ({
-        userId: m.userId,
-        userName: m.name,
-        amount: idx === 0 ? parsedAmount - share * (members.length - 1) : share,
-      }));
+      const activeMembers = members.filter((m) => participatingUserIds.includes(m.userId));
+      if (activeMembers.length === 0) {
+        showToast('Please select at least one participating member.', 'error');
+        return;
+      }
+
+      const share = Math.round((parsedAmount / activeMembers.length) * 100) / 100;
+      splits = members.map((m) => {
+        if (!participatingUserIds.includes(m.userId)) {
+          return { userId: m.userId, userName: m.name, amount: 0 };
+        }
+        const isFirstActive = activeMembers[0].userId === m.userId;
+        const allocatedAmount = isFirstActive
+          ? Math.round((parsedAmount - share * (activeMembers.length - 1)) * 100) / 100
+          : share;
+        return {
+          userId: m.userId,
+          userName: m.name,
+          amount: allocatedAmount,
+        };
+      });
     } else if (splitMethod === 'exact') {
+      if (Math.abs(diffExact) > 0.05) {
+        showToast(
+          `Allocated sum (${formatCurrency(sumExact, activeGroup.currency)}) does not match bill total (${formatCurrency(parsedAmount, activeGroup.currency)}). Difference: ${formatCurrency(Math.abs(diffExact), activeGroup.currency)}`,
+          'error'
+        );
+        return;
+      }
+
       splits = members.map((m) => ({
         userId: m.userId,
         userName: m.name,
-        amount: exactAmounts[m.userId] || 0,
+        amount: Number(exactAmounts[m.userId]) || 0,
       }));
     } else if (splitMethod === 'percentage') {
+      if (Math.abs(diffPercentages) > 0.1) {
+        showToast(`Total percentage must equal 100%. Currently at ${sumPercentages}%.`, 'error');
+        return;
+      }
+
       splits = members.map((m) => ({
         userId: m.userId,
         userName: m.name,
@@ -91,9 +186,14 @@ export const AddExpensePage: React.FC = () => {
         percentage: percentages[m.userId] || 0,
       }));
     } else if (splitMethod === 'shares') {
+      if (sumShares <= 0) {
+        showToast('Total shares must be greater than zero.', 'error');
+        return;
+      }
+
       splits = members.map((m) => {
         const count = sharesCount[m.userId] || 1;
-        const amt = sumShares > 0 ? Math.round(((parsedAmount * count) / sumShares) * 100) / 100 : 0;
+        const amt = Math.round(((parsedAmount * count) / sumShares) * 100) / 100;
         return {
           userId: m.userId,
           userName: m.name,
@@ -103,6 +203,7 @@ export const AddExpensePage: React.FC = () => {
       });
     }
 
+    setIsSubmitting(true);
     const exp = await createExpense({
       title: title.trim(),
       amount: parsedAmount,
@@ -112,7 +213,7 @@ export const AddExpensePage: React.FC = () => {
       date,
       splitMethod,
       splits,
-      notes,
+      notes: notes.trim(),
     });
 
     setIsSubmitting(false);
@@ -175,7 +276,7 @@ export const AddExpensePage: React.FC = () => {
             </label>
             <input
               type="number"
-              min="1"
+              min="0.01"
               step="any"
               required
               value={amount}
@@ -273,19 +374,42 @@ export const AddExpensePage: React.FC = () => {
 
           {/* Dynamic Split Editor */}
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+            {/* 1. EQUAL SPLIT */}
             {splitMethod === 'equal' && (
               <div>
-                <p className="text-xs text-slate-600 mb-3">
-                  Evenly split between {members.length} members.
-                </p>
+                <div className="flex items-center justify-between mb-3 text-xs text-slate-600">
+                  <span>Select who participated in this expense:</span>
+                  <span className="font-semibold text-indigo-600">
+                    {participatingUserIds.length} of {members.length} members
+                  </span>
+                </div>
                 <div className="space-y-2">
                   {members.map((m) => {
-                    const share = Math.round((parsedAmount / members.length) * 100) / 100;
+                    const isChecked = participatingUserIds.includes(m.userId);
+                    const activeCount = participatingUserIds.length || 1;
+                    const share = isChecked ? Math.round((parsedAmount / activeCount) * 100) / 100 : 0;
+
                     return (
-                      <div key={m.userId} className="flex items-center justify-between text-xs py-1">
-                        <span className="text-slate-800 font-medium">{m.name}</span>
-                        <span className="font-mono font-bold text-slate-900 tabular-nums">
-                          {formatCurrency(share, activeGroup?.currency)}
+                      <div
+                        key={m.userId}
+                        onClick={() => toggleParticipant(m.userId)}
+                        className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer transition-colors ${
+                          isChecked
+                            ? 'bg-white border-indigo-200 text-slate-900'
+                            : 'bg-slate-100/60 border-slate-200 text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleParticipant(m.userId)}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                          />
+                          <span className="font-medium">{m.name}</span>
+                        </div>
+                        <span className="font-mono font-bold tabular-nums">
+                          {isChecked ? formatCurrency(share, activeGroup?.currency) : 'Excluded (Rs. 0)'}
                         </span>
                       </div>
                     );
@@ -294,82 +418,162 @@ export const AddExpensePage: React.FC = () => {
               </div>
             )}
 
+            {/* 2. EXACT AMOUNTS */}
             {splitMethod === 'exact' && (
               <div className="space-y-2.5">
-                <div className="flex justify-between text-xs text-slate-500 mb-1">
-                  <span>Member</span>
-                  <span>
-                    Allocated: {formatCurrency(sumExact, activeGroup?.currency)} / {formatCurrency(parsedAmount, activeGroup?.currency)}
-                  </span>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-slate-500">Member</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAutoDistributeExact}
+                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Distribute Evenly</span>
+                    </button>
+                    <span
+                      className={`font-semibold font-mono ${
+                        Math.abs(diffExact) <= 0.05 ? 'text-emerald-600' : 'text-rose-600'
+                      }`}
+                    >
+                      Sum: {formatCurrency(sumExact, activeGroup?.currency)} / {formatCurrency(parsedAmount, activeGroup?.currency)}
+                    </span>
+                  </div>
                 </div>
+
+                {Math.abs(diffExact) > 0.05 && (
+                  <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-medium flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      {diffExact > 0
+                        ? `Rs. ${diffExact.toFixed(2)} remaining to allocate.`
+                        : `Rs. ${Math.abs(diffExact).toFixed(2)} allocated over the bill total.`}
+                    </span>
+                  </div>
+                )}
+
                 {members.map((m) => (
                   <div key={m.userId} className="flex items-center justify-between gap-3 text-xs">
                     <span className="text-slate-800 font-medium truncate">{m.name}</span>
                     <input
                       type="number"
                       min="0"
-                      value={exactAmounts[m.userId] || 0}
+                      step="any"
+                      value={exactAmounts[m.userId] ?? ''}
                       onChange={(e) =>
                         setExactAmounts({ ...exactAmounts, [m.userId]: Number(e.target.value) || 0 })
                       }
-                      className="w-28 p-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono font-semibold"
+                      className="w-32 p-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono font-semibold"
                     />
                   </div>
                 ))}
               </div>
             )}
 
+            {/* 3. PERCENTAGES */}
             {splitMethod === 'percentage' && (
               <div className="space-y-2.5">
-                <div className="flex justify-between text-xs text-slate-500 mb-1">
-                  <span>Member</span>
-                  <span className={sumPercentages === 100 ? 'text-emerald-600 font-bold' : 'text-rose-500 font-bold'}>
-                    Total: {sumPercentages}% (Must be 100%)
-                  </span>
-                </div>
-                {members.map((m) => (
-                  <div key={m.userId} className="flex items-center justify-between gap-3 text-xs">
-                    <span className="text-slate-800 font-medium truncate">{m.name}</span>
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={percentages[m.userId] || 0}
-                        onChange={(e) =>
-                          setPercentages({ ...percentages, [m.userId]: Number(e.target.value) || 0 })
-                        }
-                        className="w-20 p-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono font-semibold"
-                      />
-                      <span className="text-slate-400 font-mono">%</span>
-                    </div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-slate-500">Member</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAutoDistributePercentages}
+                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Distribute Evenly</span>
+                    </button>
+                    <span
+                      className={`font-semibold font-mono ${
+                        Math.abs(diffPercentages) <= 0.1 ? 'text-emerald-600' : 'text-rose-600'
+                      }`}
+                    >
+                      Total: {sumPercentages}% (Target: 100%)
+                    </span>
                   </div>
-                ))}
+                </div>
+
+                {Math.abs(diffPercentages) > 0.1 && (
+                  <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-medium flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      {diffPercentages > 0
+                        ? `${diffPercentages.toFixed(1)}% remaining to reach 100%.`
+                        : `${Math.abs(diffPercentages).toFixed(1)}% over 100%.`}
+                    </span>
+                  </div>
+                )}
+
+                {members.map((m) => {
+                  const calculatedAmt =
+                    Math.round(((parsedAmount * (percentages[m.userId] || 0)) / 100) * 100) / 100;
+                  return (
+                    <div key={m.userId} className="flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <span className="text-slate-800 font-medium block truncate">{m.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {formatCurrency(calculatedAmt, activeGroup?.currency)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="any"
+                          value={percentages[m.userId] ?? ''}
+                          onChange={(e) =>
+                            setPercentages({ ...percentages, [m.userId]: Number(e.target.value) || 0 })
+                          }
+                          className="w-20 p-1.5 bg-white border border-slate-200 rounded-lg text-right font-mono font-semibold"
+                        />
+                        <span className="text-slate-400 font-mono">%</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
+            {/* 4. SHARES */}
             {splitMethod === 'shares' && (
               <div className="space-y-2.5">
                 <p className="text-xs text-slate-500 mb-2">
-                  Assign proportional weight shares (e.g., 2 shares for couples, 1 share for singles).
+                  Assign proportional weight shares (e.g. 2 shares for couples, 1 share for individuals).
                 </p>
-                {members.map((m) => (
-                  <div key={m.userId} className="flex items-center justify-between gap-3 text-xs">
-                    <span className="text-slate-800 font-medium truncate">{m.name}</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="1"
-                        value={sharesCount[m.userId] || 1}
-                        onChange={(e) =>
-                          setSharesCount({ ...sharesCount, [m.userId]: Math.max(1, Number(e.target.value) || 1) })
-                        }
-                        className="w-16 p-1.5 bg-white border border-slate-200 rounded-lg text-center font-mono font-semibold"
-                      />
-                      <span className="text-[11px] text-slate-500">parts</span>
+                {members.map((m) => {
+                  const shares = sharesCount[m.userId] || 1;
+                  const calculatedAmt =
+                    sumShares > 0 ? Math.round(((parsedAmount * shares) / sumShares) * 100) / 100 : 0;
+
+                  return (
+                    <div key={m.userId} className="flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <span className="text-slate-800 font-medium block truncate">{m.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {formatCurrency(calculatedAmt, activeGroup?.currency)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={sharesCount[m.userId] ?? 1}
+                          onChange={(e) =>
+                            setSharesCount({
+                              ...sharesCount,
+                              [m.userId]: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                          className="w-16 p-1.5 bg-white border border-slate-200 rounded-lg text-center font-mono font-semibold"
+                        />
+                        <span className="text-[11px] text-slate-500">share(s)</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -394,7 +598,7 @@ export const AddExpensePage: React.FC = () => {
           <button
             type="button"
             onClick={() => navigate('/dashboard')}
-            className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl"
+            className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition-colors"
           >
             Cancel
           </button>

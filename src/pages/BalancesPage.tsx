@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Scale,
   ArrowRight,
@@ -12,6 +12,8 @@ import {
   RotateCcw,
   Sparkles,
   Check,
+  History,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
@@ -25,7 +27,11 @@ export const BalancesPage: React.FC = () => {
     recordSettlement,
     expenses,
     settlements,
+    showToast,
   } = useApp();
+
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [analysis, setAnalysis] = useState<SettlementAnalysis | null>(null);
   const [selectedTransfer, setSelectedTransfer] = useState<OptimizedTransfer | null>(null);
@@ -33,6 +39,14 @@ export const BalancesPage: React.FC = () => {
   const [refNote, setRefNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState(false);
+
+  // Check if transfer was passed via router navigation state
+  useEffect(() => {
+    const stateTransfer = (location.state as any)?.transfer;
+    if (stateTransfer) {
+      setSelectedTransfer(stateTransfer);
+    }
+  }, [location.state]);
 
   const fetchBalances = () => {
     if (activeGroup) {
@@ -70,7 +84,24 @@ export const BalancesPage: React.FC = () => {
         setSelectedTransfer(null);
         setSuccessMessage(false);
         setRefNote('');
-      }, 2000);
+      }, 1800);
+    }
+  };
+
+  // Past settlements in this group
+  const groupSettlements = settlements.filter((s) => s.groupId === activeGroup?.id);
+
+  const getPaymentMethodBadge = (method: string) => {
+    switch (method) {
+      case 'bank_transfer':
+        return { label: 'Bank Transfer', color: 'bg-blue-50 text-blue-700 border-blue-200' };
+      case 'frimi_genie':
+        return { label: 'FriMi / Genie', color: 'bg-purple-50 text-purple-700 border-purple-200' };
+      case 'koko_qr':
+        return { label: 'LankaQR / Koko', color: 'bg-amber-50 text-amber-700 border-amber-200' };
+      case 'cash':
+      default:
+        return { label: 'Cash', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     }
   };
 
@@ -97,10 +128,10 @@ export const BalancesPage: React.FC = () => {
               Optimization Stats
             </span>
             <div className="text-3xl font-extrabold font-mono text-emerald-400 tabular-nums">
-              {analysis?.savingsPercentage || 57}% Fewer Transfers
+              {analysis?.savingsPercentage ?? 0}% Fewer Transfers
             </div>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              Consolidated {analysis?.rawDebtsCount || 7} circular IOUs down to {analysis?.optimizedCount || 3} direct payments.
+              Consolidated {analysis?.rawDebtsCount || 0} circular IOUs down to {analysis?.optimizedCount || 0} direct payments.
             </p>
           </div>
 
@@ -108,14 +139,14 @@ export const BalancesPage: React.FC = () => {
             <div>
               <span className="text-[11px] text-slate-400 block mb-0.5">Raw Circular</span>
               <span className="text-xl font-bold font-mono text-rose-400 tabular-nums">
-                {analysis?.rawDebtsCount || 7} tx
+                {analysis?.rawDebtsCount || 0} tx
               </span>
             </div>
             <ArrowRight className="w-4 h-4 text-slate-500" />
             <div>
               <span className="text-[11px] text-slate-400 block mb-0.5">Optimized</span>
               <span className="text-xl font-bold font-mono text-emerald-400 tabular-nums">
-                {analysis?.optimizedCount || 3} tx
+                {analysis?.optimizedCount || 0} tx
               </span>
             </div>
           </div>
@@ -238,10 +269,68 @@ export const BalancesPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Recorded Settlement History in this Group */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">
+              Recorded Settlement History
+            </h2>
+            <p className="text-xs text-slate-500">
+              Audit record of completed payments in {activeGroup?.name}.
+            </p>
+          </div>
+          <span className="text-xs font-mono font-semibold text-slate-400">
+            {groupSettlements.length} payments
+          </span>
+        </div>
+
+        {groupSettlements.length === 0 ? (
+          <p className="text-xs text-slate-400 py-6 text-center">
+            No settlements recorded in this group yet. Settle an outstanding balance above to record payments.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {groupSettlements.map((s) => {
+              const badge = getPaymentMethodBadge(s.paymentMethod);
+              return (
+                <div
+                  key={s.id}
+                  className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center shrink-0">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-slate-900">{s.payerName}</span>
+                        <span className="text-slate-400">paid</span>
+                        <span className="font-bold text-indigo-700">{s.payeeName}</span>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${badge.color}`}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {formatDate(s.date)} {s.referenceNote ? `· ${s.referenceNote}` : ''}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="font-mono font-bold text-emerald-600 text-sm tabular-nums text-right">
+                    {formatCurrency(s.amount, s.currency)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Settle Up Action Modal */}
       {selectedTransfer && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
             {successMessage ? (
               <div className="text-center py-6">
                 <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
@@ -300,7 +389,7 @@ export const BalancesPage: React.FC = () => {
                             onClick={() => setPaymentMethod(item.id as any)}
                             className={`flex items-center gap-2 p-2.5 rounded-xl border font-medium transition-all ${
                               paymentMethod === item.id
-                                ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-semibold'
+                                ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-semibold shadow-xs'
                                 : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                             }`}
                           >
@@ -331,7 +420,7 @@ export const BalancesPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSelectedTransfer(null)}
-                      className="flex-1 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
+                      className="flex-1 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors"
                     >
                       Cancel
                     </button>

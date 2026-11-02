@@ -12,6 +12,10 @@ import {
   TrendingUp,
   History,
   Check,
+  Edit2,
+  Settings as SettingsIcon,
+  X,
+  AlertTriangle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
@@ -24,24 +28,56 @@ export const GroupDetailsPage: React.FC = () => {
     groups,
     currentUser,
     deleteExpense,
+    updateExpense,
     addMemberToGroup,
+    removeMemberFromGroup,
+    updateGroup,
+    deleteGroup,
     getGroupOptimization,
     setCurrentGroupId,
+    showToast,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'expenses' | 'balances' | 'members' | 'history'>('expenses');
+  const [activeTab, setActiveTab] = useState<'expenses' | 'balances' | 'members'>('expenses');
   const [group, setGroup] = useState<Group | undefined>(undefined);
   const [groupExpenses, setGroupExpenses] = useState<Expense[]>([]);
   const [analysis, setAnalysis] = useState<SettlementAnalysis | null>(null);
+
+  // Modals state
+  const [showInviteModal, setShowInviteModal] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [showInviteModal, setShowInviteModal] = useState(false);
+
+  const [showEditGroupModal, setShowEditGroupModal] = useState(false);
+  const [editGroupName, setEditGroupName] = useState('');
+  const [editGroupDesc, setEditGroupDesc] = useState('');
+  const [editGroupCategory, setEditGroupCategory] = useState<'trip' | 'home' | 'dinner' | 'event' | 'other'>('trip');
+  const [editGroupCurrency, setEditGroupCurrency] = useState('LKR');
+
+  const [showDeleteGroupModal, setShowDeleteGroupModal] = useState(false);
+
+  // Edit Expense modal state
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [editExpenseTitle, setEditExpenseTitle] = useState('');
+  const [editExpenseAmount, setEditExpenseAmount] = useState<number>(0);
+  const [editExpenseCategory, setEditExpenseCategory] = useState<any>('food');
+  const [editExpensePayerId, setEditExpensePayerId] = useState('');
+  const [editExpenseDate, setEditExpenseDate] = useState('');
+
+  // Delete Expense confirm modal state
+  const [expenseToDelete, setExpenseToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (groupId) {
       setCurrentGroupId(groupId);
       const found = groups.find((g) => g.id === groupId);
       setGroup(found);
+      if (found) {
+        setEditGroupName(found.name);
+        setEditGroupDesc(found.description || '');
+        setEditGroupCategory(found.category || 'trip');
+        setEditGroupCurrency(found.currency || 'LKR');
+      }
 
       // Fetch expenses
       fetch(`/api/groups/${groupId}/expenses`)
@@ -59,11 +95,12 @@ export const GroupDetailsPage: React.FC = () => {
 
   if (!group) {
     return (
-      <div className="text-center py-16">
+      <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 p-8">
         <h2 className="text-base font-bold text-slate-800">Group Not Found</h2>
+        <p className="text-xs text-slate-500 mt-1">This group may have been deleted or does not exist.</p>
         <button
           onClick={() => navigate('/groups')}
-          className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold"
+          className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold"
         >
           Back to Groups
         </button>
@@ -75,7 +112,10 @@ export const GroupDetailsPage: React.FC = () => {
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberName.trim()) return;
+    if (!newMemberName.trim()) {
+      showToast('Please enter member name.', 'error');
+      return;
+    }
     const ok = await addMemberToGroup(group.id, newMemberName.trim(), newMemberEmail.trim());
     if (ok) {
       setShowInviteModal(false);
@@ -84,14 +124,95 @@ export const GroupDetailsPage: React.FC = () => {
     }
   };
 
-  const handleDeleteExpense = async (id: string) => {
-    if (confirm('Are you sure you want to delete this expense?')) {
-      await deleteExpense(id);
-      setGroupExpenses(groupExpenses.filter((e) => e.id !== id));
+  const handleRemoveMember = async (memberId: string, memberName: string) => {
+    if (window.confirm(`Are you sure you want to remove ${memberName} from this group?`)) {
+      await removeMemberFromGroup(group.id, memberId);
+    }
+  };
+
+  const handleEditGroupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editGroupName.trim()) {
+      showToast('Group name is required.', 'error');
+      return;
+    }
+    const updated = await updateGroup(group.id, {
+      name: editGroupName.trim(),
+      description: editGroupDesc.trim(),
+      category: editGroupCategory,
+      currency: editGroupCurrency,
+    });
+    if (updated) {
+      setShowEditGroupModal(false);
+    }
+  };
+
+  const handleDeleteGroupConfirm = async () => {
+    const success = await deleteGroup(group.id);
+    if (success) {
+      navigate('/groups');
+    }
+  };
+
+  const openEditExpense = (exp: Expense) => {
+    setEditingExpense(exp);
+    setEditExpenseTitle(exp.title);
+    setEditExpenseAmount(exp.amount);
+    setEditExpenseCategory(exp.category);
+    setEditExpensePayerId(exp.payerId);
+    setEditExpenseDate(exp.date);
+  };
+
+  const handleSaveExpenseEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingExpense) return;
+    if (!editExpenseTitle.trim() || editExpenseAmount <= 0) {
+      showToast('Please provide a valid title and positive amount.', 'error');
+      return;
+    }
+
+    // Recompute equal splits if splitMethod was equal
+    let updatedSplits = editingExpense.splits;
+    if (editingExpense.splitMethod === 'equal' && group.members.length > 0) {
+      const share = Math.round((editExpenseAmount / group.members.length) * 100) / 100;
+      updatedSplits = group.members.map((m, idx) => ({
+        userId: m.userId,
+        userName: m.name,
+        amount: idx === 0 ? editExpenseAmount - share * (group.members.length - 1) : share,
+      }));
+    }
+
+    const updated = await updateExpense(editingExpense.id, {
+      title: editExpenseTitle.trim(),
+      amount: editExpenseAmount,
+      category: editExpenseCategory,
+      payerId: editExpensePayerId,
+      date: editExpenseDate,
+      splits: updatedSplits,
+    });
+
+    if (updated) {
+      setEditingExpense(null);
+      // Refresh local expense list
+      fetch(`/api/groups/${group.id}/expenses`)
+        .then((r) => (r.ok ? r.json() : { expenses: [] }))
+        .then((res) => {
+          if (res.expenses) setGroupExpenses(res.expenses);
+        });
       getGroupOptimization(group.id).then((res) => {
         if (res) setAnalysis(res);
       });
     }
+  };
+
+  const confirmDeleteExpense = async () => {
+    if (!expenseToDelete) return;
+    await deleteExpense(expenseToDelete);
+    setGroupExpenses((prev) => prev.filter((e) => e.id !== expenseToDelete));
+    setExpenseToDelete(null);
+    getGroupOptimization(group.id).then((res) => {
+      if (res) setAnalysis(res);
+    });
   };
 
   return (
@@ -109,13 +230,27 @@ export const GroupDetailsPage: React.FC = () => {
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 uppercase">
                 {group.currency}
               </span>
+              <button
+                onClick={() => setShowEditGroupModal(true)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg transition-colors ml-1"
+                title="Edit Group Settings"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+              </button>
             </div>
             <p className="text-xs text-slate-500 mt-1 max-w-xl">
               {group.description || 'Shared expense tracking.'}
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowEditGroupModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
+            >
+              <SettingsIcon className="w-3.5 h-3.5" />
+              <span>Edit Group</span>
+            </button>
             <button
               onClick={() => navigate('/receipt/pipeline')}
               className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold transition-colors"
@@ -214,20 +349,29 @@ export const GroupDetailsPage: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between sm:justify-end gap-4">
+                <div className="flex items-center justify-between sm:justify-end gap-3">
                   <div className="text-right">
                     <span className="text-sm font-bold font-mono text-slate-900 tabular-nums">
                       {formatCurrency(exp.amount, exp.currency)}
                     </span>
                   </div>
 
-                  <button
-                    onClick={() => handleDeleteExpense(exp.id)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                    title="Delete expense"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => openEditExpense(exp)}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                      title="Edit expense"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setExpenseToDelete(exp.id)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                      title="Delete expense"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
@@ -266,8 +410,8 @@ export const GroupDetailsPage: React.FC = () => {
                         {formatCurrency(tx.amount, tx.currency)}
                       </span>
                       <button
-                        onClick={() => navigate('/balances')}
-                        className="px-3 py-1 bg-indigo-600 text-white rounded-lg font-semibold text-[11px]"
+                        onClick={() => navigate('/balances', { state: { transfer: tx } })}
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-[11px] transition-colors"
                       >
                         Settle
                       </button>
@@ -296,7 +440,7 @@ export const GroupDetailsPage: React.FC = () => {
             </div>
             <button
               onClick={() => setShowInviteModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors"
             >
               <UserPlus className="w-3.5 h-3.5" />
               <span>Add Member</span>
@@ -304,34 +448,328 @@ export const GroupDetailsPage: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {group.members.map((m) => (
-              <div
-                key={m.userId}
-                className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(m.name)}`}>
-                    {m.initials}
+            {group.members.map((m) => {
+              const isCurrentUser = m.userId === currentUser.id;
+              const canRemove = !isCurrentUser || group.members.length === 1;
+
+              return (
+                <div
+                  key={m.userId}
+                  className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(m.name)}`}>
+                      {m.initials}
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block">
+                        {m.name} {isCurrentUser ? '(You)' : ''}
+                      </span>
+                      <span className="text-[10px] text-slate-400">{m.email}</span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-xs font-bold text-slate-900 block">{m.name}</span>
-                    <span className="text-[10px] text-slate-400">{m.email}</span>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200 text-slate-600 capitalize">
+                      {m.role}
+                    </span>
+                    {canRemove && (
+                      <button
+                        onClick={() => handleRemoveMember(m.userId, m.name)}
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                        title="Remove member"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
-
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200 text-slate-600 capitalize">
-                  {m.role}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Invite Member Modal */}
+      {/* ========================================================= */}
+      {/* MODAL: EDIT GROUP */}
+      {/* ========================================================= */}
+      {showEditGroupModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">Edit Group Details</h3>
+              <button
+                onClick={() => setShowEditGroupModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditGroupSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Group Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editGroupName}
+                  onChange={(e) => setEditGroupName(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Description</label>
+                <input
+                  type="text"
+                  value={editGroupDesc}
+                  onChange={(e) => setEditGroupDesc(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Category</label>
+                  <select
+                    value={editGroupCategory}
+                    onChange={(e) => setEditGroupCategory(e.target.value as any)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                  >
+                    <option value="trip">Trip / Vacation</option>
+                    <option value="home">Apartment / Home</option>
+                    <option value="dinner">Dinner / Drinks</option>
+                    <option value="event">Event / Party</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Currency</label>
+                  <select
+                    value={editGroupCurrency}
+                    onChange={(e) => setEditGroupCurrency(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                  >
+                    <option value="LKR">LKR (Rs.)</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditGroupModal(false);
+                    setShowDeleteGroupModal(true);
+                  }}
+                  className="text-rose-600 hover:text-rose-700 font-semibold"
+                >
+                  Delete Group
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditGroupModal(false)}
+                    className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl font-semibold hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: DELETE GROUP CONFIRMATION */}
+      {/* ========================================================= */}
+      {showDeleteGroupModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">Delete Group?</h3>
+            <p className="text-xs text-slate-500 mb-5 leading-relaxed">
+              Are you sure you want to delete <span className="font-bold text-slate-800">"{group.name}"</span>? All recorded expenses and settlements in this group will be permanently removed.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteGroupModal(false)}
+                className="flex-1 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteGroupConfirm}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs"
+              >
+                Delete Group
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: DELETE EXPENSE CONFIRMATION */}
+      {/* ========================================================= */}
+      {expenseToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">Delete Expense?</h3>
+            <p className="text-xs text-slate-500 mb-5 leading-relaxed">
+              This expense will be permanently deleted and group balances will recalculate immediately.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setExpenseToDelete(null)}
+                className="flex-1 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteExpense}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: EDIT EXPENSE */}
+      {/* ========================================================= */}
+      {editingExpense && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">Edit Expense</h3>
+              <button
+                onClick={() => setEditingExpense(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveExpenseEdit} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Expense Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={editExpenseTitle}
+                  onChange={(e) => setEditExpenseTitle(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Amount ({group.currency}) *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    value={editExpenseAmount}
+                    onChange={(e) => setEditExpenseAmount(Number(e.target.value) || 0)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-indigo-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Category</label>
+                  <select
+                    value={editExpenseCategory}
+                    onChange={(e) => setEditExpenseCategory(e.target.value as any)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl capitalize"
+                  >
+                    <option value="food">Food & Drinks</option>
+                    <option value="transport">Transport</option>
+                    <option value="lodging">Accommodation</option>
+                    <option value="entertainment">Entertainment</option>
+                    <option value="utilities">Utilities</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Paid By</label>
+                  <select
+                    value={editExpensePayerId}
+                    onChange={(e) => setEditExpensePayerId(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                  >
+                    {group.members.map((m) => (
+                      <option key={m.userId} value={m.userId}>
+                        {m.name} {m.userId === currentUser.id ? '(You)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={editExpenseDate}
+                    onChange={(e) => setEditExpenseDate(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingExpense(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl font-semibold hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xs"
+                >
+                  Update Expense
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: INVITE MEMBER */}
+      {/* ========================================================= */}
       {showInviteModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
             <h3 className="text-base font-bold text-slate-900 mb-1">
               Add Member to {group.name}
             </h3>

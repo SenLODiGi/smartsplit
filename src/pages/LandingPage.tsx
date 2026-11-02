@@ -142,15 +142,9 @@ export const LandingPage: React.FC = () => {
           <div className="flex items-center gap-3 shrink-0">
             <button
               onClick={() => navigate('/login')}
-              className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 transition-colors hidden sm:block"
+              className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 transition-colors"
             >
               Log In
-            </button>
-            <button
-              onClick={() => navigate('/dashboard')}
-              className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs shadow-indigo-600/20 whitespace-nowrap shrink-0"
-            >
-              Launch App Free
             </button>
           </div>
         </div>

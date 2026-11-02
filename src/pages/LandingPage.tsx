@@ -205,7 +205,7 @@ export const LandingPage: React.FC = () => {
       </section>
 
       {/* 3. Interactive Hero Settlement Widget */}
-      <section className="py-16 px-4 sm:px-6 bg-white border-b border-slate-200">
+      <section id="debt-minimizer" className="py-16 px-4 sm:px-6 bg-white border-b border-slate-200">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-8">
             <span className="text-xs font-bold uppercase tracking-wider text-indigo-600">

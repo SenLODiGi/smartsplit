@@ -384,17 +384,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (targetGroupId) {
         if (isSupabaseConfigured && !isDemoMode) {
           const sbExpenses = await supabaseApi.getExpenses(targetGroupId);
-          if (sbExpenses && sbExpenses.length > 0) {
-            setExpenses(sbExpenses);
-            return;
+          setExpenses(sbExpenses || []);
+        } else {
+          const expRes = await fetch(`/api/groups/${targetGroupId}/expenses`).then((r) =>
+            r.ok ? r.json() : { expenses: [] }
+          );
+          if (expRes.expenses) {
+            setExpenses(expRes.expenses);
           }
-        }
-
-        const expRes = await fetch(`/api/groups/${targetGroupId}/expenses`).then((r) =>
-          r.ok ? r.json() : { expenses: [] }
-        );
-        if (expRes.expenses) {
-          setExpenses(expRes.expenses);
         }
       }
     } catch (err) {
@@ -412,16 +409,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (currentGroupId) {
       if (isSupabaseConfigured && !isDemoMode) {
         supabaseApi.getExpenses(currentGroupId).then((res) => {
-          if (res && res.length > 0) {
-            setExpenses(res);
-            return;
-          }
-          fetch(`/api/groups/${currentGroupId}/expenses`)
-            .then((r) => (r.ok ? r.json() : { expenses: [] }))
-            .then((resp) => {
-              if (resp.expenses) setExpenses(resp.expenses);
-            })
-            .catch(console.error);
+          setExpenses(res || []);
         });
       } else {
         fetch(`/api/groups/${currentGroupId}/expenses`)
@@ -852,6 +840,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateExpense = async (expenseId: string, expenseData: any): Promise<Expense | null> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const updated = await supabaseApi.updateExpense(expenseId, expenseData);
+        if (updated) {
+          await refreshData();
+          showToast(`Expense "${updated.title}" updated successfully!`, 'success');
+          return updated;
+        }
+      }
+
       const res = await fetch(`/api/expenses/${expenseId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -944,7 +941,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const targetGroup = groups.find((g) => g.id === groupId);
       if (targetGroup) {
-        return calculateGroupBalancesAndOptimization(targetGroup, expenses, settlements);
+        let groupExps = expenses.filter((e) => e.groupId === groupId);
+        if (groupExps.length === 0 && isSupabaseConfigured && !isDemoMode) {
+          const freshExps = await supabaseApi.getExpenses(groupId);
+          if (freshExps && freshExps.length > 0) groupExps = freshExps;
+        }
+        return calculateGroupBalancesAndOptimization(targetGroup, groupExps, settlements);
       }
       const res = await fetch(`/api/groups/${groupId}/balances`);
       if (res.ok) {

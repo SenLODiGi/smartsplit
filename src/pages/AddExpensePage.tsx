@@ -47,16 +47,39 @@ export const AddExpensePage: React.FC = () => {
     if (members.length > 0) {
       setParticipatingUserIds(members.map((m) => m.userId));
 
+      const isCurrentInMembers = members.some((m) => m.userId === currentUser.id);
+      if (isCurrentInMembers) {
+        setPayerId(currentUser.id);
+      } else {
+        setPayerId(members[0].userId);
+      }
+
       const initExact: Record<string, number> = {};
       const initPct: Record<string, number> = {};
       const initShares: Record<string, number> = {};
 
-      const equalShare = Math.round((parsedAmount / members.length) * 100) / 100;
-      const equalPct = Math.round((100 / members.length) * 10) / 10;
+      const totalCents = Math.round(parsedAmount * 100);
+      const baseCents = Math.floor(totalCents / members.length);
+      let remCents = totalCents - baseCents * members.length;
 
-      members.forEach((m) => {
-        initExact[m.userId] = equalShare;
-        initPct[m.userId] = equalPct;
+      const basePct = Math.floor((100 / members.length) * 10) / 10;
+      let accPct = 0;
+
+      members.forEach((m, idx) => {
+        let cents = baseCents;
+        if (remCents > 0) {
+          cents += 1;
+          remCents -= 1;
+        }
+        initExact[m.userId] = cents / 100;
+
+        if (idx === members.length - 1) {
+          initPct[m.userId] = Math.round((100 - accPct) * 10) / 10;
+        } else {
+          initPct[m.userId] = basePct;
+          accPct += basePct;
+        }
+
         initShares[m.userId] = 1;
       });
 
@@ -64,15 +87,22 @@ export const AddExpensePage: React.FC = () => {
       setPercentages(initPct);
       setSharesCount(initShares);
     }
-  }, [activeGroup?.id]);
+  }, [activeGroup?.id, currentUser.id]);
 
   // Quick helper to redistribute exact amounts evenly across members
   const handleAutoDistributeExact = () => {
     if (members.length === 0 || parsedAmount <= 0) return;
-    const share = Math.round((parsedAmount / members.length) * 100) / 100;
+    const totalCents = Math.round(parsedAmount * 100);
+    const baseCents = Math.floor(totalCents / members.length);
+    let remCents = totalCents - baseCents * members.length;
     const newExact: Record<string, number> = {};
-    members.forEach((m, idx) => {
-      newExact[m.userId] = idx === 0 ? parsedAmount - share * (members.length - 1) : share;
+    members.forEach((m) => {
+      let cents = baseCents;
+      if (remCents > 0) {
+        cents += 1;
+        remCents -= 1;
+      }
+      newExact[m.userId] = cents / 100;
     });
     setExactAmounts(newExact);
     showToast('Amounts evenly distributed!', 'info');
@@ -136,6 +166,7 @@ export const AddExpensePage: React.FC = () => {
     }
 
     let splits: any[] = [];
+    const totalCents = Math.round(parsedAmount * 100);
 
     if (splitMethod === 'equal') {
       const activeMembers = members.filter((m) => participatingUserIds.includes(m.userId));
@@ -144,23 +175,27 @@ export const AddExpensePage: React.FC = () => {
         return;
       }
 
-      const share = Math.round((parsedAmount / activeMembers.length) * 100) / 100;
+      const count = activeMembers.length;
+      const baseCents = Math.floor(totalCents / count);
+      let remainderCents = totalCents - baseCents * count;
+
       splits = members.map((m) => {
         if (!participatingUserIds.includes(m.userId)) {
           return { userId: m.userId, userName: m.name, amount: 0 };
         }
-        const isFirstActive = activeMembers[0].userId === m.userId;
-        const allocatedAmount = isFirstActive
-          ? Math.round((parsedAmount - share * (activeMembers.length - 1)) * 100) / 100
-          : share;
+        let cents = baseCents;
+        if (remainderCents > 0) {
+          cents += 1;
+          remainderCents -= 1;
+        }
         return {
           userId: m.userId,
           userName: m.name,
-          amount: allocatedAmount,
+          amount: cents / 100,
         };
       });
     } else if (splitMethod === 'exact') {
-      if (Math.abs(diffExact) > 0.05) {
+      if (Math.abs(diffExact) > 0.01) {
         showToast(
           `Allocated sum (${formatCurrency(sumExact, activeGroup.currency)}) does not match bill total (${formatCurrency(parsedAmount, activeGroup.currency)}). Difference: ${formatCurrency(Math.abs(diffExact), activeGroup.currency)}`,
           'error'
@@ -171,36 +206,68 @@ export const AddExpensePage: React.FC = () => {
       splits = members.map((m) => ({
         userId: m.userId,
         userName: m.name,
-        amount: Number(exactAmounts[m.userId]) || 0,
+        amount: Math.round(Number(exactAmounts[m.userId] || 0) * 100) / 100,
       }));
     } else if (splitMethod === 'percentage') {
-      if (Math.abs(diffPercentages) > 0.1) {
+      if (Math.abs(diffPercentages) > 0.05) {
         showToast(`Total percentage must equal 100%. Currently at ${sumPercentages}%.`, 'error');
         return;
       }
 
-      splits = members.map((m) => ({
-        userId: m.userId,
-        userName: m.name,
-        amount: Math.round(((parsedAmount * (percentages[m.userId] || 0)) / 100) * 100) / 100,
-        percentage: percentages[m.userId] || 0,
-      }));
+      let allocatedCents = 0;
+      const computedSplits = members.map((m) => {
+        const pct = Number(percentages[m.userId] || 0);
+        const cents = Math.round((totalCents * pct) / 100);
+        allocatedCents += cents;
+        return {
+          userId: m.userId,
+          userName: m.name,
+          amount: cents / 100,
+          percentage: pct,
+          rawCents: cents,
+        };
+      });
+
+      // Distribute rounding cents to first member with percentage > 0
+      const diffCents = totalCents - allocatedCents;
+      if (diffCents !== 0) {
+        const target = computedSplits.find((s) => (s.percentage || 0) > 0) || computedSplits[0];
+        if (target) {
+          target.amount = Math.round(target.amount * 100 + diffCents) / 100;
+        }
+      }
+
+      splits = computedSplits.map(({ rawCents, ...rest }) => rest);
     } else if (splitMethod === 'shares') {
       if (sumShares <= 0) {
         showToast('Total shares must be greater than zero.', 'error');
         return;
       }
 
-      splits = members.map((m) => {
-        const count = sharesCount[m.userId] || 1;
-        const amt = Math.round(((parsedAmount * count) / sumShares) * 100) / 100;
+      let allocatedCents = 0;
+      const computedSplits = members.map((m) => {
+        const count = Number(sharesCount[m.userId] || 0);
+        const cents = Math.floor((totalCents * count) / sumShares);
+        allocatedCents += cents;
         return {
           userId: m.userId,
           userName: m.name,
-          amount: amt,
+          amount: cents / 100,
           shares: count,
+          rawCents: cents,
         };
       });
+
+      let remainderCents = totalCents - allocatedCents;
+      for (let i = 0; i < computedSplits.length && remainderCents > 0; i++) {
+        if (computedSplits[i].shares > 0) {
+          computedSplits[i].amount = (computedSplits[i].rawCents + 1) / 100;
+          computedSplits[i].rawCents += 1;
+          remainderCents -= 1;
+        }
+      }
+
+      splits = computedSplits.map(({ rawCents, ...rest }) => rest);
     }
 
     setIsSubmitting(true);

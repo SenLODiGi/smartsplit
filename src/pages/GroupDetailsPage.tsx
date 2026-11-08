@@ -16,6 +16,8 @@ import {
   Settings as SettingsIcon,
   X,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
@@ -70,6 +72,7 @@ export const GroupDetailsPage: React.FC = () => {
 
   // Delete Expense confirm modal state
   const [expenseToDelete, setExpenseToDelete] = useState<string | null>(null);
+  const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
 
   useEffect(() => {
     if (groupId) {
@@ -95,15 +98,19 @@ export const GroupDetailsPage: React.FC = () => {
 
       // Sync expenses
       const groupSpecific = expenses.filter((e) => e.groupId === groupId);
-      if (groupSpecific.length > 0) {
+      if (isSupabaseConfigured) {
         setGroupExpenses(groupSpecific);
       } else {
-        fetch(`/api/groups/${groupId}/expenses`)
-          .then((r) => (r.ok ? r.json() : { expenses: [] }))
-          .then((res) => {
-            if (res.expenses) setGroupExpenses(res.expenses);
-          })
-          .catch(() => {});
+        if (groupSpecific.length > 0) {
+          setGroupExpenses(groupSpecific);
+        } else {
+          fetch(`/api/groups/${groupId}/expenses`)
+            .then((r) => (r.ok ? r.json() : { expenses: [] }))
+            .then((res) => {
+              if (res.expenses) setGroupExpenses(res.expenses);
+            })
+            .catch(() => {});
+        }
       }
 
       // Fetch analysis
@@ -208,15 +215,25 @@ export const GroupDetailsPage: React.FC = () => {
       return;
     }
 
-    // Recompute equal splits if splitMethod was equal
+    // Recompute equal splits if splitMethod was equal using exact cents
     let updatedSplits = editingExpense.splits;
     if (editingExpense.splitMethod === 'equal' && group.members.length > 0) {
-      const share = Math.round((editExpenseAmount / group.members.length) * 100) / 100;
-      updatedSplits = group.members.map((m, idx) => ({
-        userId: m.userId,
-        userName: m.name,
-        amount: idx === 0 ? editExpenseAmount - share * (group.members.length - 1) : share,
-      }));
+      const totalCents = Math.round(editExpenseAmount * 100);
+      const count = group.members.length;
+      const baseCents = Math.floor(totalCents / count);
+      let remCents = totalCents - baseCents * count;
+      updatedSplits = group.members.map((m) => {
+        let cents = baseCents;
+        if (remCents > 0) {
+          cents += 1;
+          remCents -= 1;
+        }
+        return {
+          userId: m.userId,
+          userName: m.name,
+          amount: cents / 100,
+        };
+      });
     }
 
     const updated = await updateExpense(editingExpense.id, {
@@ -230,12 +247,16 @@ export const GroupDetailsPage: React.FC = () => {
 
     if (updated) {
       setEditingExpense(null);
-      // Refresh local expense list
-      fetch(`/api/groups/${group.id}/expenses`)
-        .then((r) => (r.ok ? r.json() : { expenses: [] }))
-        .then((res) => {
-          if (res.expenses) setGroupExpenses(res.expenses);
-        });
+      if (isSupabaseConfigured) {
+        const fresh = await supabaseApi.getExpenses(group.id);
+        if (fresh) setGroupExpenses(fresh);
+      } else {
+        fetch(`/api/groups/${group.id}/expenses`)
+          .then((r) => (r.ok ? r.json() : { expenses: [] }))
+          .then((res) => {
+            if (res.expenses) setGroupExpenses(res.expenses);
+          });
+      }
       getGroupOptimization(group.id).then((res) => {
         if (res) setAnalysis(res);
       });
@@ -244,12 +265,14 @@ export const GroupDetailsPage: React.FC = () => {
 
   const confirmDeleteExpense = async () => {
     if (!expenseToDelete) return;
-    await deleteExpense(expenseToDelete);
-    setGroupExpenses((prev) => prev.filter((e) => e.id !== expenseToDelete));
-    setExpenseToDelete(null);
-    getGroupOptimization(group.id).then((res) => {
-      if (res) setAnalysis(res);
-    });
+    const ok = await deleteExpense(expenseToDelete);
+    if (ok) {
+      setGroupExpenses((prev) => prev.filter((e) => e.id !== expenseToDelete));
+      setExpenseToDelete(null);
+      getGroupOptimization(group.id).then((res) => {
+        if (res) setAnalysis(res);
+      });
+    }
   };
 
   return (
@@ -378,49 +401,109 @@ export const GroupDetailsPage: React.FC = () => {
               </button>
             </div>
           ) : (
-            groupExpenses.map((exp) => (
-              <div
-                key={exp.id}
-                className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 p-4 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-bold text-slate-900">{exp.title}</h3>
-                    <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                      {exp.category}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Paid by <span className="font-semibold text-slate-800">{exp.payerName}</span> on {formatDate(exp.date)} · Split: {exp.splitMethod}
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-between sm:justify-end gap-3">
-                  <div className="text-right">
-                    <span className="text-sm font-bold font-mono text-slate-900 tabular-nums">
-                      {formatCurrency(exp.amount, exp.currency)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEditExpense(exp)}
-                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                      title="Edit expense"
+            groupExpenses.map((exp) => {
+              const isExpanded = expandedExpenseId === exp.id;
+              return (
+                <div
+                  key={exp.id}
+                  className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-all shadow-2xs overflow-hidden"
+                >
+                  <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div
+                      className="cursor-pointer flex-1"
+                      onClick={() => setExpandedExpenseId(isExpanded ? null : exp.id)}
                     >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setExpenseToDelete(exp.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                      title="Delete expense"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-slate-900">{exp.title}</h3>
+                        <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                          {exp.category}
+                        </span>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 capitalize">
+                          {exp.splitMethod} split
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
+                        <span>
+                          Paid by <strong className="text-slate-800">{exp.payerName}</strong> on{' '}
+                          {formatDate(exp.date)}
+                        </span>
+                        <span>·</span>
+                        <span className="text-indigo-600 font-medium">
+                          {exp.splits?.length || 0} participants
+                        </span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-3">
+                      <div className="text-right">
+                        <span className="text-sm font-bold font-mono text-slate-900 tabular-nums">
+                          {formatCurrency(exp.amount, exp.currency)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setExpandedExpenseId(isExpanded ? null : exp.id)}
+                          className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                          title={isExpanded ? 'Collapse breakdown' : 'View participants'}
+                        >
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => openEditExpense(exp)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit expense"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setExpenseToDelete(exp.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete expense"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* Expandable Split Participants Breakdown */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-2 bg-slate-50/70 border-t border-slate-100 text-xs">
+                      {exp.notes && (
+                        <p className="text-[11px] text-slate-600 italic mb-2.5">
+                          "{exp.notes}"
+                        </p>
+                      )}
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                        Split Breakdown
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {(exp.splits || []).map((s, sIdx) => (
+                          <div
+                            key={s.userId || sIdx}
+                            className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200"
+                          >
+                            <span className="font-medium text-slate-700 truncate">
+                              {s.userName || 'Member'}
+                              {s.percentage ? ` (${s.percentage}%)` : ''}
+                              {s.shares ? ` (${s.shares} shares)` : ''}
+                            </span>
+                            <span className="font-mono font-bold text-slate-900 tabular-nums">
+                              {formatCurrency(s.amount, exp.currency)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -430,6 +513,63 @@ export const GroupDetailsPage: React.FC = () => {
       {/* ========================================================= */}
       {activeTab === 'balances' && (
         <div className="space-y-6">
+          {/* Member Net Balances */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+            <h2 className="text-sm font-bold text-slate-900 mb-4">
+              Individual Member Balances
+            </h2>
+
+            {analysis && analysis.netBalances.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {analysis.netBalances.map((nb) => {
+                  const isPositive = nb.balance > 0.01;
+                  const isNegative = nb.balance < -0.01;
+                  return (
+                    <div
+                      key={nb.userId}
+                      className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(
+                            nb.userName
+                          )}`}
+                        >
+                          {nb.userName.slice(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <span className="font-semibold text-slate-900 block truncate">
+                            {nb.userName} {nb.userId === currentUser.id ? '(You)' : ''}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {isPositive ? 'Gets back' : isNegative ? 'Owes group' : 'Settled up'}
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        className={`font-mono font-bold tabular-nums ${
+                          isPositive
+                            ? 'text-emerald-600'
+                            : isNegative
+                            ? 'text-rose-600'
+                            : 'text-slate-500'
+                        }`}
+                      >
+                        {isPositive ? '+' : ''}
+                        {formatCurrency(nb.balance, group.currency)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 py-4 text-center">
+                No balance calculations available yet.
+              </p>
+            )}
+          </div>
+
+          {/* Optimized Direct Transfers */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
             <h2 className="text-sm font-bold text-slate-900 mb-4">
               Optimized Direct Transfers

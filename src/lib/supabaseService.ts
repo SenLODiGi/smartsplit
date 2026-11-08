@@ -142,7 +142,7 @@ export const supabaseApi = {
       let groupsData: any = null;
       let groupsErr: any = null;
 
-      // Primary query with invited members and creator
+      // Primary query with invited members, creator and expenses
       const res = await supabase
         .from('groups')
         .select(`
@@ -161,6 +161,10 @@ export const supabaseApi = {
               avatar,
               initials
             )
+          ),
+          expenses (
+            id,
+            amount
           )
         `)
         .order('created_at', { ascending: false });
@@ -168,8 +172,8 @@ export const supabaseApi = {
       groupsData = res.data;
       groupsErr = res.error;
 
-      // Fallback query if invited columns not yet migrated
-      if (groupsErr && (groupsErr.message.includes('invited_name') || groupsErr.message.includes('column'))) {
+      // Fallback query if columns not yet migrated
+      if (groupsErr) {
         const fallbackRes = await supabase
           .from('groups')
           .select(`
@@ -223,7 +227,15 @@ export const supabaseApi = {
             initials,
           };
         });
-        return mapGroupFromDb(g, members);
+        const grp = mapGroupFromDb(g, members);
+        if (g.expenses && Array.isArray(g.expenses)) {
+          grp.expensesCount = g.expenses.length;
+          grp.totalSpend = g.expenses.reduce(
+            (sum: number, e: any) => sum + (Number(e.amount) || 0),
+            0
+          );
+        }
+        return grp;
       });
     } catch (err) {
       console.error('Failed to get groups:', err);
@@ -246,7 +258,8 @@ export const supabaseApi = {
             invited_name,
             invited_email,
             profiles ( id, name, email, avatar, initials )
-          )
+          ),
+          expenses ( id, amount )
         `)
         .eq('id', groupId)
         .single();
@@ -278,7 +291,15 @@ export const supabaseApi = {
         };
       });
 
-      return mapGroupFromDb(data, members);
+      const grp = mapGroupFromDb(data, members);
+      if (data.expenses && Array.isArray(data.expenses)) {
+        grp.expensesCount = data.expenses.length;
+        grp.totalSpend = data.expenses.reduce(
+          (sum: number, e: any) => sum + (Number(e.amount) || 0),
+          0
+        );
+      }
+      return grp;
     } catch (err) {
       console.error('getGroupById error:', err);
       return null;
@@ -578,17 +599,22 @@ export const supabaseApi = {
   async getExpenses(groupId: string): Promise<Expense[]> {
     if (!isSupabaseConfigured) return [];
     try {
+      // 1. Primary query with profiles, members and items
       const { data, error } = await supabase
         .from('expenses')
         .select(`
           *,
-          profiles:payer_id ( name, avatar, initials ),
+          profiles:payer_id ( id, name, avatar, initials ),
           expense_splits (
+            id,
             user_id,
+            member_id,
+            invited_name,
             amount,
             percentage,
             shares,
-            profiles:user_id ( name )
+            profiles:user_id ( id, name, avatar ),
+            group_members:member_id ( id, invited_name, invited_email )
           ),
           expense_items (
             id,
@@ -603,22 +629,93 @@ export const supabaseApi = {
         .eq('group_id', groupId)
         .order('expense_date', { ascending: false });
 
-      if (error || !data) {
-        console.warn('getExpenses notice:', error?.message);
+      if (!error && data) {
+        return data.map(mapExpenseFromDb);
+      }
+
+      // 2. Fallback query if member_id not yet migrated
+      const { data: fallbackData, error: fbError } = await supabase
+        .from('expenses')
+        .select(`
+          *,
+          profiles:payer_id ( id, name, avatar, initials ),
+          expense_splits (
+            id,
+            user_id,
+            amount,
+            percentage,
+            shares,
+            profiles:user_id ( id, name )
+          ),
+          expense_items (
+            id,
+            name,
+            quantity,
+            unit_price,
+            total_price,
+            confidence,
+            expense_item_assignments ( user_id )
+          )
+        `)
+        .eq('group_id', groupId)
+        .order('expense_date', { ascending: false });
+
+      if (fbError || !fallbackData) {
+        console.warn('getExpenses notice:', fbError?.message || error?.message);
         return [];
       }
 
-      return data.map(mapExpenseFromDb);
+      return fallbackData.map(mapExpenseFromDb);
     } catch (err) {
       console.error('getExpenses error:', err);
       return [];
     }
   },
 
+  async getExpenseById(expenseId: string): Promise<Expense | null> {
+    if (!isSupabaseConfigured) return null;
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select(`
+          *,
+          profiles:payer_id ( id, name, avatar, initials ),
+          expense_splits (
+            id,
+            user_id,
+            member_id,
+            invited_name,
+            amount,
+            percentage,
+            shares,
+            profiles:user_id ( id, name ),
+            group_members:member_id ( id, invited_name, invited_email )
+          ),
+          expense_items (
+            id,
+            name,
+            quantity,
+            unit_price,
+            total_price,
+            confidence,
+            expense_item_assignments ( user_id )
+          )
+        `)
+        .eq('id', expenseId)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return mapExpenseFromDb(data);
+    } catch (err) {
+      console.error('getExpenseById error:', err);
+      return null;
+    }
+  },
+
   async createExpense(expenseData: any): Promise<Expense | null> {
     if (!isSupabaseConfigured) return null;
     try {
-      // Try atomic stored procedure first
+      // 1. Try atomic stored procedure first for 100% transactional safety
       const { data: rpcData, error: rpcErr } = await supabase.rpc('create_complete_expense', {
         p_group_id: expenseData.groupId,
         p_payer_id: expenseData.payerId,
@@ -638,12 +735,43 @@ export const supabaseApi = {
         return mapExpenseFromDb(rpcData);
       }
 
-      // Direct fallback insert if RPC is not present
+      // 2. Direct fallback insert if RPC is not present
+      let payerIdToInsert: string | null = expenseData.payerId;
+      let payerMemberIdToInsert: string | null = null;
+      let payerNameToInsert = 'Member';
+
+      if (expenseData.payerId) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id, name')
+          .eq('id', expenseData.payerId)
+          .maybeSingle();
+
+        if (prof) {
+          payerIdToInsert = prof.id;
+          payerNameToInsert = prof.name;
+        } else {
+          const { data: gm } = await supabase
+            .from('group_members')
+            .select('id, user_id, invited_name')
+            .eq('id', expenseData.payerId)
+            .maybeSingle();
+
+          if (gm) {
+            payerIdToInsert = gm.user_id || null;
+            payerMemberIdToInsert = gm.id;
+            payerNameToInsert = gm.invited_name || 'Member';
+          }
+        }
+      }
+
       const { data: expRow, error: expErr } = await supabase
         .from('expenses')
         .insert({
           group_id: expenseData.groupId,
-          payer_id: expenseData.payerId,
+          payer_id: payerIdToInsert,
+          payer_member_id: payerMemberIdToInsert,
+          payer_name: payerNameToInsert,
           title: expenseData.title.trim(),
           amount: Number(expenseData.amount),
           currency: expenseData.currency || 'LKR',
@@ -656,23 +784,209 @@ export const supabaseApi = {
         .select()
         .single();
 
-      if (expErr || !expRow) throw expErr;
+      if (expErr || !expRow) throw expErr || new Error('Failed to insert expense');
 
       // Insert splits
       if (expenseData.splits && Array.isArray(expenseData.splits)) {
-        const splitsToInsert = expenseData.splits.map((s: any) => ({
-          expense_id: expRow.id,
-          user_id: s.userId,
-          amount: Number(s.amount) || 0,
-          percentage: s.percentage ? Number(s.percentage) : null,
-          shares: s.shares ? Number(s.shares) : null,
-        }));
-        await supabase.from('expense_splits').insert(splitsToInsert);
+        const splitsToInsert: any[] = [];
+        for (const s of expenseData.splits) {
+          let sUserId: string | null = null;
+          let sMemberId: string | null = null;
+          let sInvitedName: string = s.userName || 'Member';
+
+          if (s.userId) {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('id, name')
+              .eq('id', s.userId)
+              .maybeSingle();
+
+            if (prof) {
+              sUserId = prof.id;
+              sInvitedName = prof.name;
+            } else {
+              const { data: gm } = await supabase
+                .from('group_members')
+                .select('id, user_id, invited_name')
+                .eq('id', s.userId)
+                .maybeSingle();
+
+              if (gm) {
+                sUserId = gm.user_id || null;
+                sMemberId = gm.id;
+                sInvitedName = gm.invited_name || sInvitedName;
+              }
+            }
+          }
+
+          splitsToInsert.push({
+            expense_id: expRow.id,
+            user_id: sUserId,
+            member_id: sMemberId,
+            invited_name: sInvitedName,
+            amount: Number(s.amount) || 0,
+            percentage: s.percentage ? Number(s.percentage) : null,
+            shares: s.shares ? Number(s.shares) : null,
+          });
+        }
+
+        if (splitsToInsert.length > 0) {
+          await supabase.from('expense_splits').insert(splitsToInsert);
+        }
       }
 
-      return mapExpenseFromDb(expRow);
+      // Log activity
+      try {
+        await supabase.from('activities').insert({
+          group_id: expenseData.groupId,
+          type: 'expense_created',
+          actor_name: payerNameToInsert,
+          description: `added "${expenseData.title.trim()}" (${expenseData.currency || 'LKR'} ${expenseData.amount})`,
+          amount: Number(expenseData.amount),
+          currency: expenseData.currency || 'LKR',
+        });
+      } catch {}
+
+      return mapExpenseFromDb({
+        ...expRow,
+        expense_splits: expenseData.splits,
+      });
     } catch (err) {
       console.error('createExpense error:', err);
+      return null;
+    }
+  },
+
+  async updateExpense(expenseId: string, expenseData: any): Promise<Expense | null> {
+    if (!isSupabaseConfigured) return null;
+    try {
+      // 1. Try atomic stored procedure first
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('update_complete_expense', {
+        p_expense_id: expenseId,
+        p_title: expenseData.title.trim(),
+        p_amount: Number(expenseData.amount),
+        p_category: expenseData.category || 'food',
+        p_payer_id: expenseData.payerId || null,
+        p_expense_date: expenseData.date || new Date().toISOString().slice(0, 10),
+        p_notes: expenseData.notes || '',
+        p_splits: expenseData.splits || [],
+      });
+
+      if (!rpcErr && rpcData) {
+        return mapExpenseFromDb(rpcData);
+      }
+
+      // 2. Direct fallback update
+      const updates: any = {
+        title: expenseData.title.trim(),
+        amount: Number(expenseData.amount),
+        category: expenseData.category || 'food',
+        expense_date: expenseData.date || new Date().toISOString().slice(0, 10),
+        notes: expenseData.notes || '',
+        updated_at: new Date().toISOString(),
+      };
+
+      if (expenseData.payerId) {
+        // Resolve profile or member
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id, name')
+          .eq('id', expenseData.payerId)
+          .maybeSingle();
+
+        if (prof) {
+          updates.payer_id = prof.id;
+          updates.payer_name = prof.name;
+        } else {
+          const { data: gm } = await supabase
+            .from('group_members')
+            .select('id, user_id, invited_name')
+            .eq('id', expenseData.payerId)
+            .maybeSingle();
+
+          if (gm) {
+            updates.payer_id = gm.user_id || null;
+            updates.payer_member_id = gm.id;
+            updates.payer_name = gm.invited_name || 'Member';
+          }
+        }
+      }
+
+      const { data: updatedExp, error: updateErr } = await supabase
+        .from('expenses')
+        .update(updates)
+        .eq('id', expenseId)
+        .select()
+        .single();
+
+      if (updateErr || !updatedExp) throw updateErr || new Error('Failed to update expense');
+
+      // Update splits if provided
+      if (expenseData.splits && Array.isArray(expenseData.splits)) {
+        await supabase.from('expense_splits').delete().eq('expense_id', expenseId);
+
+        const splitsToInsert: any[] = [];
+        for (const s of expenseData.splits) {
+          let sUserId: string | null = null;
+          let sMemberId: string | null = null;
+          let sInvitedName: string = s.userName || 'Member';
+
+          if (s.userId) {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('id, name')
+              .eq('id', s.userId)
+              .maybeSingle();
+
+            if (prof) {
+              sUserId = prof.id;
+              sInvitedName = prof.name;
+            } else {
+              const { data: gm } = await supabase
+                .from('group_members')
+                .select('id, user_id, invited_name')
+                .eq('id', s.userId)
+                .maybeSingle();
+
+              if (gm) {
+                sUserId = gm.user_id || null;
+                sMemberId = gm.id;
+                sInvitedName = gm.invited_name || sInvitedName;
+              }
+            }
+          }
+
+          splitsToInsert.push({
+            expense_id: expenseId,
+            user_id: sUserId,
+            member_id: sMemberId,
+            invited_name: sInvitedName,
+            amount: Number(s.amount) || 0,
+            percentage: s.percentage ? Number(s.percentage) : null,
+            shares: s.shares ? Number(s.shares) : null,
+          });
+        }
+
+        if (splitsToInsert.length > 0) {
+          await supabase.from('expense_splits').insert(splitsToInsert);
+        }
+      }
+
+      // Log activity
+      try {
+        await supabase.from('activities').insert({
+          group_id: updatedExp.group_id,
+          type: 'expense_created',
+          actor_name: updates.payer_name || 'Member',
+          description: `updated expense "${expenseData.title.trim()}"`,
+          amount: Number(expenseData.amount),
+          currency: updatedExp.currency || 'LKR',
+        });
+      } catch {}
+
+      return mapExpenseFromDb({ ...updatedExp, expense_splits: expenseData.splits });
+    } catch (err) {
+      console.error('updateExpense error:', err);
       return null;
     }
   },
@@ -680,8 +994,27 @@ export const supabaseApi = {
   async deleteExpense(expenseId: string): Promise<boolean> {
     if (!isSupabaseConfigured) return false;
     try {
+      const { data: exp } = await supabase
+        .from('expenses')
+        .select('id, group_id, title')
+        .eq('id', expenseId)
+        .maybeSingle();
+
       const { error } = await supabase.from('expenses').delete().eq('id', expenseId);
-      return !error;
+      if (error) throw error;
+
+      if (exp) {
+        try {
+          await supabase.from('activities').insert({
+            group_id: exp.group_id,
+            type: 'expense_created',
+            actor_name: 'Member',
+            description: `deleted expense "${exp.title}"`,
+          });
+        } catch {}
+      }
+
+      return true;
     } catch (err) {
       console.error('deleteExpense error:', err);
       return false;

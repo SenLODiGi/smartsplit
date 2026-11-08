@@ -677,19 +677,28 @@ app.get('/api/groups', (_req, res) => {
 });
 
 app.post('/api/groups', (req, res) => {
-  const { name, description, currency = 'LKR', category = 'trip', memberNames = [] } = req.body;
+  const { name, description, currency = 'LKR', category = 'trip', memberNames = [], creator, userId } = req.body;
 
   if (!name?.trim()) {
     return res.status(400).json({ error: 'Group name is required' });
   }
 
+  // Use caller's verified identity if provided, fallback to demo user ONLY in pure demo mode
+  const effectiveCreator: User = creator || (userId && userId !== 'usr_kasun' ? {
+    id: userId,
+    name: req.body.userName || 'Admin',
+    email: req.body.userEmail || '',
+    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+    initials: (req.body.userName || 'AD').slice(0, 2).toUpperCase(),
+  } : currentUser);
+
   const newMembers: GroupMember[] = [
-    { ...currentUser, userId: currentUser.id, role: 'admin' },
+    { ...effectiveCreator, userId: effectiveCreator.id, role: 'admin' },
   ];
 
   if (Array.isArray(memberNames)) {
     memberNames.forEach((mName: string, idx: number) => {
-      if (mName && mName.trim() && mName.trim() !== currentUser.name) {
+      if (mName && mName.trim() && mName.trim() !== effectiveCreator.name) {
         const id = `usr_custom_${Date.now()}_${idx}`;
         const initials = mName.trim().split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
         newMembers.push({
@@ -723,6 +732,8 @@ app.post('/api/groups', (req, res) => {
     coverGradient,
     members: newMembers,
     createdAt: new Date().toISOString(),
+    createdBy: effectiveCreator.id,
+    creatorName: effectiveCreator.name,
   };
 
   groups.unshift(newGroup);
@@ -731,7 +742,7 @@ app.post('/api/groups', (req, res) => {
     id: `act_${Date.now()}`,
     groupId: newGroup.id,
     type: 'group_created',
-    actorName: currentUser.name,
+    actorName: effectiveCreator.name,
     description: `created group "${newGroup.name}" with ${newMembers.length} members`,
     timestamp: new Date().toISOString(),
   });
@@ -745,12 +756,20 @@ app.get('/api/groups/:groupId', (req, res) => {
     return res.status(404).json({ error: 'Group not found' });
   }
 
+  // Filter out demo user from custom user groups
+  const safeGroup = (group.createdBy && group.createdBy !== 'usr_kasun')
+    ? {
+        ...group,
+        members: group.members.filter((m) => m.userId !== 'usr_kasun' && m.name !== 'Kasun Perera'),
+      }
+    : group;
+
   const groupExp = expenses.filter((e) => e.groupId === group.id);
   const totalSpend = groupExp.reduce((sum, e) => sum + e.amount, 0);
   const analysis = calculateGroupBalancesAndOptimization(group.id);
 
   res.json({
-    group,
+    group: safeGroup,
     totalSpend,
     expensesCount: groupExp.length,
     analysis,

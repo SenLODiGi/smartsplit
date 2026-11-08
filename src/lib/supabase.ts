@@ -1,14 +1,17 @@
 import { createClient } from "@supabase/supabase-js";
 
 // Read Supabase environment variables from Vite (import.meta.env) with process.env fallback
+const env = typeof import.meta !== "undefined" ? import.meta.env : undefined;
+const globalProcess = typeof globalThis !== "undefined" ? (globalThis as any).process : undefined;
+
 const supabaseUrl =
-  (typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_URL) ||
-  (typeof process !== "undefined" && process.env?.VITE_SUPABASE_URL) ||
+  env?.VITE_SUPABASE_URL ||
+  globalProcess?.env?.VITE_SUPABASE_URL ||
   "";
 
 const supabaseKey =
-  (typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
-  (typeof process !== "undefined" && process.env?.VITE_SUPABASE_ANON_KEY) ||
+  env?.VITE_SUPABASE_ANON_KEY ||
+  globalProcess?.env?.VITE_SUPABASE_ANON_KEY ||
   "";
 
 // Determine if valid production Supabase credentials are configured

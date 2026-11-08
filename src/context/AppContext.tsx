@@ -704,51 +704,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }): Promise<Group | null> => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {
-        // Direct verification of auth user
+        // Direct verification of Supabase auth user
         const { data: authData } = await supabase.auth.getUser();
         const currentAuthUser = authData?.user;
-        const verifiedUserId = currentAuthUser?.id || (currentUser.id && currentUser.id !== 'usr_kasun' ? currentUser.id : null);
+        const verifiedUserId =
+          currentAuthUser?.id ||
+          (currentUser.id && currentUser.id !== 'usr_kasun' ? currentUser.id : null);
 
-        if (verifiedUserId) {
-          const created = await supabaseApi.createGroup({
-            ...data,
-            userId: verifiedUserId,
-          });
-          if (created) {
-            await refreshData(verifiedUserId);
-            setCurrentGroupId(created.id);
-            showToast(`Group "${created.name}" created successfully!`, 'success');
-            return created;
-          }
+        if (!verifiedUserId) {
+          showToast('Please log in with your Supabase account to create a group.', 'error');
+          return null;
         }
+
+        const res = await supabaseApi.createGroup({
+          ...data,
+          userId: verifiedUserId,
+        });
+
+        if (!res.group) {
+          console.error('Supabase group creation failed:', res.error);
+          showToast(res.error || 'Failed to create group in database.', 'error', 6000);
+          return null;
+        }
+
+        // 100% verified Supabase success
+        await refreshData(verifiedUserId);
+        setCurrentGroupId(res.group.id);
+        showToast(`Group "${res.group.name}" created successfully!`, 'success');
+        return res.group;
       }
 
-      const creatorPayload = {
-        id: currentUser.id || 'usr_demo',
-        name: currentUser.name || 'Admin',
-        email: currentUser.email || '',
-        avatar: currentUser.avatar,
-        initials: currentUser.initials,
-      };
+      // Standalone Demo Mode (Only active when NOT signed in with real Supabase credentials)
+      if (isDemoMode) {
+        const creatorPayload = {
+          id: currentUser.id || 'usr_demo',
+          name: currentUser.name || 'Admin',
+          email: currentUser.email || '',
+          avatar: currentUser.avatar,
+          initials: currentUser.initials,
+        };
 
-      const res = await fetch('/api/groups', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...data,
-          creator: creatorPayload,
-          userId: currentUser.id,
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        await refreshData();
-        setCurrentGroupId(json.group.id);
-        showToast(`Group "${json.group.name}" created successfully!`, 'success');
-        return json.group;
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        showToast(errJson.error || 'Failed to create group. Please check fields.', 'error');
+        const res = await fetch('/api/groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...data,
+            creator: creatorPayload,
+            userId: currentUser.id,
+          }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          await refreshData();
+          setCurrentGroupId(json.group.id);
+          showToast(`Group "${json.group.name}" created successfully!`, 'success');
+          return json.group;
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          showToast(errJson.error || 'Failed to create group. Please check fields.', 'error');
+        }
       }
     } catch (err: any) {
       console.error('Failed to create group:', err);

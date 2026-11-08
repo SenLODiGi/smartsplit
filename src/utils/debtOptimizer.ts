@@ -1,8 +1,10 @@
-import { Group, Expense, SettlementPayment, OptimizedTransfer, SettlementAnalysis } from '../types';
+import { Group, Expense, SettlementPayment, OptimizedTransfer, SettlementAnalysis, MemberBalance } from '../types';
 
 /**
  * Greedy Bipartite Debt Simplification Engine
  * Computes net balances: Balance = TotalPaid - TotalOwed
+ * Positive balance: Member should receive money (gets back).
+ * Negative balance: Member owes money (owes).
  * Sorts debtors and creditors by magnitude and iteratively matches the largest debtor with the largest creditor.
  */
 export function calculateGroupBalancesAndOptimization(
@@ -10,7 +12,7 @@ export function calculateGroupBalancesAndOptimization(
   expenses: Expense[],
   settlements: SettlementPayment[]
 ): SettlementAnalysis {
-  if (!group || !group.members) {
+  if (!group || !group.members || group.members.length === 0) {
     return {
       netBalances: [],
       rawDebtsCount: 0,
@@ -20,71 +22,115 @@ export function calculateGroupBalancesAndOptimization(
     };
   }
 
-  const groupExpenses = expenses.filter((e) => e.groupId === group.id);
-  const groupSettlements = settlements.filter(
+  const groupExpenses = (expenses || []).filter((e) => e.groupId === group.id);
+  const groupSettlements = (settlements || []).filter(
     (s) => s.groupId === group.id && (s.status === 'completed' || !s.status)
   );
 
-  // Map each member's net balance: balance = totalPaid - totalOwed
-  const balanceMap = new Map<string, { name: string; avatar: string; net: number }>();
-  for (const m of group.members) {
-    balanceMap.set(m.userId, { name: m.name, avatar: m.avatar || '', net: 0 });
+  // Map each member's financial state: totalPaid, totalOwed, net
+  interface MemberState {
+    userId: string;
+    userName: string;
+    avatar: string;
+    totalPaid: number;
+    totalOwed: number;
   }
 
-  // 1. Process expenses
+  const memberStates = new Map<string, MemberState>();
+  const idLookup = new Map<string, string>(); // Maps id, userId, or lowercase name -> canonical userId
+
+  for (const m of group.members) {
+    const canonicalId = m.userId || m.id;
+    const state: MemberState = {
+      userId: canonicalId,
+      userName: m.name,
+      avatar: m.avatar || '',
+      totalPaid: 0,
+      totalOwed: 0,
+    };
+    memberStates.set(canonicalId, state);
+
+    if (m.userId) idLookup.set(m.userId, canonicalId);
+    if (m.id) idLookup.set(m.id, canonicalId);
+    if (m.name) idLookup.set(m.name.trim().toLowerCase(), canonicalId);
+  }
+
+  const getMemberState = (idOrName?: string, fallbackName?: string): MemberState | undefined => {
+    if (!idOrName && !fallbackName) return undefined;
+    if (idOrName) {
+      const canonical = idLookup.get(idOrName) || idLookup.get(idOrName.trim().toLowerCase());
+      if (canonical && memberStates.has(canonical)) return memberStates.get(canonical);
+    }
+    if (fallbackName) {
+      const canonical = idLookup.get(fallbackName.trim().toLowerCase());
+      if (canonical && memberStates.has(canonical)) return memberStates.get(canonical);
+    }
+    return undefined;
+  };
+
+  // 1. Process Expenses
   for (const exp of groupExpenses) {
+    // 1A. Payer(s) paid for the expense
     if (exp.payers && Array.isArray(exp.payers) && exp.payers.length > 0) {
       for (const p of exp.payers) {
-        let payer = balanceMap.get(p.userId);
-        if (!payer) {
-          const entry = Array.from(balanceMap.values()).find(
-            (val) => val.name.toLowerCase() === p.userName.toLowerCase()
-          );
-          if (entry) payer = entry;
-        }
+        const payer = getMemberState(p.userId, p.userName);
         if (payer) {
-          payer.net += Number(p.amount) || 0;
+          payer.totalPaid += Number(p.amount) || 0;
         }
       }
     } else {
-      const payer = balanceMap.get(exp.payerId);
+      const payer = getMemberState(exp.payerId, exp.payerName);
       if (payer) {
-        payer.net += exp.amount;
+        payer.totalPaid += Number(exp.amount) || 0;
       }
     }
 
+    // 1B. Splits (each participant owes their allocated split amount)
     if (exp.splits && Array.isArray(exp.splits)) {
       for (const split of exp.splits) {
-        let debtor = balanceMap.get(split.userId);
-        if (!debtor) {
-          const entry = Array.from(balanceMap.values()).find(
-            (val) => val.name.toLowerCase() === split.userName.toLowerCase()
-          );
-          if (entry) debtor = entry;
-        }
+        const debtor = getMemberState(split.userId, split.userName);
         if (debtor) {
-          debtor.net -= split.amount;
+          debtor.totalOwed += Number(split.amount) || 0;
         }
       }
     }
   }
 
-  // 2. Process recorded settlements
+  // 2. Process Recorded Settlements (Direct peer debt paydowns)
   for (const stl of groupSettlements) {
-    const payer = balanceMap.get(stl.payerId);
-    const payee = balanceMap.get(stl.payeeId);
-    if (payer) payer.net += stl.amount; // payer paid down debt
-    if (payee) payee.net -= stl.amount; // payee received cash
+    const payer = getMemberState(stl.payerId, stl.payerName);
+    const payee = getMemberState(stl.payeeId, stl.payeeName);
+    const amount = Number(stl.amount) || 0;
+
+    if (payer) {
+      payer.totalPaid += amount; // Sender paid down debt
+    }
+    if (payee) {
+      payee.totalOwed += amount; // Receiver got paid
+    }
   }
 
-  const netBalances = Array.from(balanceMap.entries()).map(([userId, data]) => ({
-    userId,
-    userName: data.name,
-    avatar: data.avatar,
-    balance: Math.round(data.net * 100) / 100,
-  }));
+  // 3. Assemble Net Positions using: Net Balance = Total Paid - Total Owed
+  const netBalances: MemberBalance[] = Array.from(memberStates.values()).map((state) => {
+    const totalPaid = Math.round(state.totalPaid * 100) / 100;
+    const totalOwed = Math.round(state.totalOwed * 100) / 100;
+    const balance = Math.round((totalPaid - totalOwed) * 100) / 100;
+    const getsBack = balance > 0.01 ? balance : 0;
+    const owes = balance < -0.01 ? Math.round(Math.abs(balance) * 100) / 100 : 0;
 
-  // Separate into debtors (net < 0) and creditors (net > 0)
+    return {
+      userId: state.userId,
+      userName: state.userName,
+      avatar: state.avatar,
+      totalPaid,
+      totalOwed,
+      balance,
+      getsBack,
+      owes,
+    };
+  });
+
+  // 4. Separate into Debtors (Net < 0) and Creditors (Net > 0)
   interface Person {
     userId: string;
     userName: string;
@@ -97,9 +143,9 @@ export function calculateGroupBalancesAndOptimization(
 
   for (const nb of netBalances) {
     if (nb.balance < -0.01) {
-      debtors.push({ userId: nb.userId, userName: nb.userName, avatar: nb.avatar, amount: Math.abs(nb.balance) });
+      debtors.push({ userId: nb.userId, userName: nb.userName, avatar: nb.avatar || '', amount: Math.abs(nb.balance) });
     } else if (nb.balance > 0.01) {
-      creditors.push({ userId: nb.userId, userName: nb.userName, avatar: nb.avatar, amount: nb.balance });
+      creditors.push({ userId: nb.userId, userName: nb.userName, avatar: nb.avatar || '', amount: nb.balance });
     }
   }
 
@@ -129,7 +175,7 @@ export function calculateGroupBalancesAndOptimization(
     }
   }
 
-  // Greedy debt simplification
+  // 5. Greedy Debt Minimization
   const optimizedTransfers: OptimizedTransfer[] = [];
   let dIdx = 0;
   let cIdx = 0;
@@ -154,8 +200,8 @@ export function calculateGroupBalancesAndOptimization(
       });
     }
 
-    debtor.amount -= settled;
-    creditor.amount -= settled;
+    debtor.amount = Math.round((debtor.amount - settled) * 100) / 100;
+    creditor.amount = Math.round((creditor.amount - settled) * 100) / 100;
 
     if (debtor.amount < 0.01) dIdx++;
     if (creditor.amount < 0.01) cIdx++;
@@ -166,7 +212,7 @@ export function calculateGroupBalancesAndOptimization(
   const savings = rawCount > 0 ? Math.round(((rawCount - optimizedCount) / rawCount) * 100) : 0;
 
   return {
-    netBalances: netBalances.map(({ userId, userName, balance }) => ({ userId, userName, balance })),
+    netBalances,
     rawDebtsCount: rawCount,
     optimizedTransfers,
     optimizedCount,

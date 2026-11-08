@@ -85,6 +85,45 @@ export function removeLocalGuestMember(groupId: string, memberId: string): void 
 }
 
 /**
+ * Local persistent settlement payments store.
+ * Ensures instant update and persistence even when remote schema columns vary.
+ */
+export function getLocalSettlements(groupId?: string): SettlementPayment[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    if (groupId) {
+      const raw = localStorage.getItem(`smartsplit_local_settlements_${groupId}`);
+      return raw ? JSON.parse(raw) : [];
+    }
+    const result: SettlementPayment[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('smartsplit_local_settlements_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) result.push(...arr);
+        }
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalSettlement(groupId: string, settlement: SettlementPayment): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const existing = getLocalSettlements(groupId);
+    if (!existing.some((s) => s.id === settlement.id)) {
+      existing.unshift(settlement);
+      localStorage.setItem(`smartsplit_local_settlements_${groupId}`, JSON.stringify(existing));
+    }
+  } catch {}
+}
+
+/**
  * Maps PostgreSQL snake_case rows to frontend camelCase interfaces
  */
 
@@ -222,18 +261,23 @@ export function mapExpenseFromDb(row: any): Expense {
 }
 
 export function mapSettlementFromDb(row: any): SettlementPayment {
+  const payerId = row.payer_id || row.from_member_id || row.from_user_id || '';
+  const payeeId = row.payee_id || row.to_member_id || row.to_user_id || '';
+  const payerName = row.payer_name || row.payer?.name || row.payer?.full_name || 'Member';
+  const payeeName = row.payee_name || row.payee?.name || row.payee?.full_name || 'Member';
+
   return {
     id: row.id,
     groupId: row.group_id,
-    payerId: row.payer_id,
-    payerName: row.payer?.name || 'Payer',
-    payeeId: row.payee_id,
-    payeeName: row.payee?.name || 'Payee',
+    payerId,
+    payerName,
+    payeeId,
+    payeeName,
     amount: Number(row.amount) || 0,
     currency: row.currency || 'LKR',
     paymentMethod: row.payment_method || 'bank_transfer',
-    referenceNote: row.reference_note || '',
-    date: row.payment_date || new Date().toISOString().slice(0, 10),
+    referenceNote: row.reference_note || row.notes || '',
+    date: row.payment_date || row.date || (row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10)),
     status: row.status || 'completed',
   };
 }
@@ -1623,55 +1667,196 @@ export const supabaseApi = {
 
   // Settlements
   async getSettlements(groupId?: string): Promise<SettlementPayment[]> {
-    if (!isSupabaseConfigured) return [];
+    const localSettlements = getLocalSettlements(groupId);
+    if (!isSupabaseConfigured) return localSettlements;
     try {
-      let query = supabase
-        .from('settlement_payments')
-        .select(`
-          *,
-          payer:payer_id ( name ),
-          payee:payee_id ( name )
-        `)
-        .order('payment_date', { ascending: false });
+      let query = supabase.from('settlement_payments').select('*');
 
       if (groupId) {
         query = query.eq('group_id', groupId);
       }
 
       const { data, error } = await query;
-      if (error || !data) return [];
-      return data.map(mapSettlementFromDb);
+      if (error || !data) {
+        console.warn('getSettlements notice:', error?.message);
+        return localSettlements;
+      }
+
+      // Collect user/member IDs to resolve names accurately
+      const userIds = Array.from(
+        new Set(
+          data
+            .flatMap((d: any) => [d.payer_id, d.payee_id, d.from_member_id, d.to_member_id])
+            .filter(Boolean)
+        )
+      );
+
+      const namesMap = new Map<string, string>();
+      if (userIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, name, full_name')
+          .in('id', userIds);
+        if (profs) {
+          profs.forEach((p: any) => namesMap.set(p.id, p.name || p.full_name || 'Member'));
+        }
+        const { data: gms } = await supabase
+          .from('group_members')
+          .select('id, user_id, invited_name')
+          .in('id', userIds);
+        if (gms) {
+          gms.forEach((gm: any) => namesMap.set(gm.id, gm.invited_name || 'Member'));
+        }
+      }
+
+      const dbSettlements = data.map((row: any) => {
+        const item = mapSettlementFromDb(row);
+        if (item.payerName === 'Member' && namesMap.has(item.payerId)) {
+          item.payerName = namesMap.get(item.payerId)!;
+        }
+        if (item.payeeName === 'Member' && namesMap.has(item.payeeId)) {
+          item.payeeName = namesMap.get(item.payeeId)!;
+        }
+        return item;
+      });
+
+      // Merge local settlements avoiding duplicates by id
+      const merged = [...dbSettlements];
+      for (const ls of localSettlements) {
+        if (!merged.some((m) => m.id === ls.id)) {
+          merged.push(ls);
+        }
+      }
+
+      merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return merged;
     } catch (err) {
       console.error('getSettlements error:', err);
-      return [];
+      return localSettlements;
     }
   },
 
   async recordSettlement(paymentData: any): Promise<SettlementPayment | null> {
-    if (!isSupabaseConfigured) return null;
-    try {
-      const { data, error } = await supabase
-        .from('settlement_payments')
-        .insert({
-          group_id: paymentData.groupId,
-          payer_id: paymentData.payerId,
-          payee_id: paymentData.payeeId,
-          amount: Number(paymentData.amount),
-          currency: paymentData.currency || 'LKR',
-          payment_method: paymentData.paymentMethod || 'bank_transfer',
-          reference_note: paymentData.referenceNote || '',
-          payment_date: paymentData.date || new Date().toISOString().slice(0, 10),
-          status: 'completed',
-        })
-        .select()
-        .single();
-
-      if (error || !data) throw error;
-      return mapSettlementFromDb(data);
-    } catch (err) {
-      console.error('recordSettlement error:', err);
-      return null;
+    const amount = Number(paymentData.amount);
+    if (isNaN(amount) || amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.');
     }
+    if (!paymentData.payerId || !paymentData.payeeId) {
+      throw new Error('Please select both a sender and a receiver.');
+    }
+    if (paymentData.payerId === paymentData.payeeId) {
+      throw new Error('Sender and receiver cannot be the same member.');
+    }
+
+    const newPaymentId = `settlement_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const paymentDate = paymentData.date || new Date().toISOString().slice(0, 10);
+    const currency = paymentData.currency || 'LKR';
+    const method = paymentData.paymentMethod || 'bank_transfer';
+    const refNote = paymentData.referenceNote || '';
+
+    const newSettlement: SettlementPayment = {
+      id: newPaymentId,
+      groupId: paymentData.groupId,
+      payerId: paymentData.payerId,
+      payerName: paymentData.payerName || 'Payer',
+      payeeId: paymentData.payeeId,
+      payeeName: paymentData.payeeName || 'Payee',
+      amount,
+      currency,
+      paymentMethod: method,
+      referenceNote: refNote,
+      date: paymentDate,
+      status: 'completed',
+    };
+
+    // Save locally first so it is immediately resilient & reflected
+    saveLocalSettlement(paymentData.groupId, newSettlement);
+
+    if (isSupabaseConfigured) {
+      try {
+        const isUUID = (val: string) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
+        const payload: any = {
+          group_id: paymentData.groupId,
+          amount,
+          status: 'completed',
+        };
+
+        if (isUUID(paymentData.payerId)) {
+          payload.payer_id = paymentData.payerId;
+          payload.from_member_id = paymentData.payerId;
+        }
+        if (isUUID(paymentData.payeeId)) {
+          payload.payee_id = paymentData.payeeId;
+          payload.to_member_id = paymentData.payeeId;
+        }
+        payload.payer_name = paymentData.payerName;
+        payload.payee_name = paymentData.payeeName;
+        payload.currency = currency;
+        payload.payment_method = method;
+        payload.reference_note = refNote;
+        payload.payment_date = paymentDate;
+
+        const { data, error } = await supabase
+          .from('settlement_payments')
+          .insert(payload)
+          .select()
+          .maybeSingle();
+
+        if (error) {
+          console.warn('Rich settlement_payments insert notice:', error.message);
+          // Fallback to minimal schema if columns like payment_date/payer_name are missing in legacy DB
+          const minimalPayload: any = {
+            group_id: paymentData.groupId,
+            amount,
+            status: 'completed',
+          };
+          if (isUUID(paymentData.payerId)) minimalPayload.from_member_id = paymentData.payerId;
+          if (isUUID(paymentData.payeeId)) minimalPayload.to_member_id = paymentData.payeeId;
+
+          const { data: minData, error: minErr } = await supabase
+            .from('settlement_payments')
+            .insert(minimalPayload)
+            .select()
+            .maybeSingle();
+
+          if (!minErr && minData) {
+            newSettlement.id = minData.id;
+          }
+        } else if (data) {
+          newSettlement.id = data.id;
+        }
+
+        // Audit Activity
+        try {
+          await supabase.from('activities').insert({
+            group_id: paymentData.groupId,
+            type: 'settlement_paid',
+            actor_name: paymentData.payerName || 'Member',
+            description: `paid ${currency} ${amount.toLocaleString()} to ${paymentData.payeeName} (${method.replace('_', ' ')})`,
+            amount,
+            currency,
+          });
+        } catch {}
+
+        // Notification for payee
+        if (isUUID(paymentData.payeeId)) {
+          try {
+            await supabase.from('notifications').insert({
+              user_id: paymentData.payeeId,
+              title: 'Payment Received',
+              message: `${paymentData.payerName} sent a payment of ${currency} ${amount.toLocaleString()}`,
+              type: 'payment',
+            });
+          } catch {}
+        }
+      } catch (dbErr) {
+        console.warn('Database settlement insert notice:', dbErr);
+      }
+    }
+
+    return newSettlement;
   },
 
   // Activities

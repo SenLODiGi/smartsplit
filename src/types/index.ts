@@ -126,12 +126,19 @@ export interface OptimizedTransfer {
   currency: string;
 }
 
+export interface MemberBalance {
+  userId: string;
+  userName: string;
+  avatar?: string;
+  totalPaid: number;
+  totalOwed: number;
+  balance: number; // Net Balance = Total Paid - Total Owed
+  getsBack: number; // Positive balance: amount member should receive
+  owes: number; // Negative balance: amount member owes
+}
+
 export interface SettlementAnalysis {
-  netBalances: {
-    userId: string;
-    userName: string;
-    balance: number;
-  }[];
+  netBalances: MemberBalance[];
   rawDebtsCount: number;
   optimizedTransfers: OptimizedTransfer[];
   optimizedCount: number;

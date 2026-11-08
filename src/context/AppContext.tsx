@@ -1139,6 +1139,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const getSettlements = async (groupId?: string): Promise<SettlementPayment[]> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        return await supabaseApi.getSettlements(groupId);
+      }
       const url = groupId ? `/api/settlements?groupId=${groupId}` : '/api/settlements';
       const res = await fetch(url);
       if (res.ok) {
@@ -1146,6 +1149,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return json.settlements || [];
       }
     } catch (err) {
+      console.error('Failed to fetch settlements:', err);
+    }
+    return [];
+  };
       console.error('Failed to fetch settlements:', err);
     }
     return [];

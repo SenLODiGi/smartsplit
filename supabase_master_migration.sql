@@ -134,6 +134,39 @@ CREATE TABLE IF NOT EXISTS public.expense_item_assignments (
 );
 
 -- ----------------------------------------------------------------------------
+-- 8.5 SETTLEMENT PAYMENTS (Peer-to-Peer Debt Paydowns)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.settlement_payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
+    payer_id UUID,
+    payee_id UUID,
+    from_member_id UUID,
+    to_member_id UUID,
+    payer_name TEXT,
+    payee_name TEXT,
+    amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+    currency TEXT DEFAULT 'LKR',
+    payment_method TEXT DEFAULT 'bank_transfer',
+    reference_note TEXT DEFAULT '',
+    payment_date DATE DEFAULT CURRENT_DATE,
+    status TEXT DEFAULT 'completed',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payer_id UUID;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payee_id UUID;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS from_member_id UUID;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS to_member_id UUID;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payer_name TEXT;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payee_name TEXT;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'LKR';
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'bank_transfer';
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS reference_note TEXT DEFAULT '';
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS payment_date DATE DEFAULT CURRENT_DATE;
+ALTER TABLE public.settlement_payments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'completed';
+
+-- ----------------------------------------------------------------------------
 -- 9. ROW LEVEL SECURITY (RLS) POLICIES
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -144,6 +177,7 @@ ALTER TABLE public.expense_splits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_item_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.settlement_payments ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read all profiles and update their own
 DROP POLICY IF EXISTS "Authenticated users can read all profiles" ON public.profiles;
@@ -249,6 +283,19 @@ CREATE POLICY "expense_items_all" ON public.expense_items FOR ALL TO authenticat
 
 DROP POLICY IF EXISTS "expense_item_assignments_all" ON public.expense_item_assignments;
 CREATE POLICY "expense_item_assignments_all" ON public.expense_item_assignments FOR ALL TO authenticated USING (true);
+
+-- Settlement payments policies
+DROP POLICY IF EXISTS "settlement_payments_select" ON public.settlement_payments;
+CREATE POLICY "settlement_payments_select" ON public.settlement_payments FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "settlement_payments_insert" ON public.settlement_payments;
+CREATE POLICY "settlement_payments_insert" ON public.settlement_payments FOR INSERT TO authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "settlement_payments_update" ON public.settlement_payments;
+CREATE POLICY "settlement_payments_update" ON public.settlement_payments FOR UPDATE TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "settlement_payments_delete" ON public.settlement_payments;
+CREATE POLICY "settlement_payments_delete" ON public.settlement_payments FOR DELETE TO authenticated USING (true);
 
 -- ----------------------------------------------------------------------------
 -- SUCCESS CONFIRMATION

@@ -197,25 +197,15 @@ export const supabaseApi = {
       let groupsData: any = null;
       let groupsErr: any = null;
 
-      // Primary query with invited members, creator and expenses
+      // Primary query with wildcard profiles to avoid missing column errors
       const res = await supabase
         .from('groups')
         .select(`
           *,
-          creator:created_by ( id, name, email ),
+          creator:created_by (*),
           group_members (
-            id,
-            user_id,
-            role,
-            invited_name,
-            invited_email,
-            profiles (
-              id,
-              name,
-              email,
-              avatar,
-              initials
-            )
+            *,
+            profiles (*)
           ),
           expenses (
             id,
@@ -227,24 +217,16 @@ export const supabaseApi = {
       groupsData = res.data;
       groupsErr = res.error;
 
-      // Fallback query if columns not yet migrated
+      // Fallback query if expenses relation has an issue
       if (groupsErr) {
         const fallbackRes = await supabase
           .from('groups')
           .select(`
             *,
-            creator:created_by ( id, name, email ),
+            creator:created_by (*),
             group_members (
-              id,
-              user_id,
-              role,
-              profiles (
-                id,
-                name,
-                email,
-                avatar,
-                initials
-              )
+              *,
+              profiles (*)
             )
           `)
           .order('created_at', { ascending: false });
@@ -259,18 +241,11 @@ export const supabaseApi = {
 
       return groupsData.map((g: any) => {
         const members: GroupMember[] = (g.group_members || []).map((gm: any) => {
-          const isRegistered = Boolean(gm.profiles);
-          const name = isRegistered
-            ? gm.profiles?.name || 'Member'
-            : gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Invited Member');
-          const email = isRegistered ? gm.profiles?.email || '' : gm.invited_email || '';
-          const avatar = isRegistered
-            ? gm.profiles?.avatar ||
-              'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'
-            : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
-          const initials = isRegistered
-            ? gm.profiles?.initials || name.slice(0, 2).toUpperCase()
-            : name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+          const prof = extractProfile(gm.profiles);
+          const name = prof?.name || gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Member');
+          const email = prof?.email || gm.invited_email || '';
+          const avatar = prof?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
+          const initials = prof?.initials || name.slice(0, 2).toUpperCase();
 
           return {
             id: gm.id,
@@ -305,14 +280,10 @@ export const supabaseApi = {
         .from('groups')
         .select(`
           *,
-          creator:created_by ( id, name, email ),
+          creator:created_by (*),
           group_members (
-            id,
-            user_id,
-            role,
-            invited_name,
-            invited_email,
-            profiles ( id, name, email, avatar, initials )
+            *,
+            profiles (*)
           ),
           expenses ( id, amount )
         `)
@@ -322,18 +293,11 @@ export const supabaseApi = {
       if (error || !data) return null;
 
       const members: GroupMember[] = (data.group_members || []).map((gm: any) => {
-        const isRegistered = Boolean(gm.profiles);
-        const name = isRegistered
-          ? gm.profiles?.name || 'Member'
-          : gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Invited Member');
-        const email = isRegistered ? gm.profiles?.email || '' : gm.invited_email || '';
-        const avatar = isRegistered
-          ? gm.profiles?.avatar ||
-            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'
-          : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
-        const initials = isRegistered
-          ? gm.profiles?.initials || name.slice(0, 2).toUpperCase()
-          : name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+        const prof = extractProfile(gm.profiles);
+        const name = prof?.name || gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Member');
+        const email = prof?.email || gm.invited_email || '';
+        const avatar = prof?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
+        const initials = prof?.initials || name.slice(0, 2).toUpperCase();
 
         return {
           id: gm.id,
@@ -371,6 +335,16 @@ export const supabaseApi = {
   }): Promise<Group | null> {
     if (!isSupabaseConfigured) return null;
     try {
+      // 0. Verify authenticated user directly from Supabase session
+      const { data: authData } = await supabase.auth.getUser();
+      const currentAuthUser = authData?.user;
+      const currentAuthUserId = currentAuthUser?.id || (data.userId && data.userId !== 'usr_kasun' ? data.userId : null);
+
+      if (!currentAuthUserId) {
+        console.error('createGroup error: A valid authenticated user is required');
+        return null;
+      }
+
       const gradientOptions = [
         'from-emerald-600 to-teal-800',
         'from-blue-600 to-indigo-800',
@@ -381,6 +355,7 @@ export const supabaseApi = {
       const cover_gradient = gradientOptions[Math.floor(Math.random() * gradientOptions.length)];
 
       // 1. Attempt Atomic RPC first for full transactional safety
+      let createdGroupObj: any = null;
       const { data: rpcGroup, error: rpcErr } = await supabase.rpc('create_group_with_creator', {
         p_name: data.name.trim(),
         p_description: data.description?.trim() || '',
@@ -391,86 +366,78 @@ export const supabaseApi = {
       });
 
       if (!rpcErr && rpcGroup) {
-        // Fetch freshly created group with members
-        const { data: freshGroup } = await supabase
-          .from('groups')
-          .select(`
-            *,
-            creator:created_by ( id, name, email ),
-            group_members (
-              id,
-              user_id,
-              role,
-              invited_name,
-              invited_email,
-              profiles ( id, name, email, avatar, initials )
-            )
-          `)
-          .eq('id', rpcGroup.id)
-          .single();
-
-        if (freshGroup) {
-          const members: GroupMember[] = (freshGroup.group_members || []).map((gm: any) => ({
-            id: gm.id,
-            userId: gm.user_id || gm.id,
-            role: gm.role,
-            name: gm.profiles?.name || gm.invited_name || 'Member',
-            email: gm.profiles?.email || gm.invited_email || '',
-            avatar: gm.profiles?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-            initials: gm.profiles?.initials || 'M',
-          }));
-          return mapGroupFromDb(freshGroup, members);
-        }
-        return mapGroupFromDb(rpcGroup, []);
-      }
-
-      // 2. Direct Supabase insert fallback
-      const { data: newGroup, error: groupErr } = await supabase
-        .from('groups')
-        .insert({
+        createdGroupObj = rpcGroup;
+      } else {
+        // 2. Direct Supabase insert fallback
+        let insertData: any = {
           name: data.name.trim(),
           description: data.description?.trim() || '',
           currency: (data.currency || 'LKR').toUpperCase(),
           category: data.category || 'trip',
           cover_gradient,
-          created_by: data.userId,
-        })
-        .select()
-        .single();
+          created_by: currentAuthUserId,
+        };
 
-      if (groupErr || !newGroup) throw groupErr || new Error('Failed to create group');
+        let { data: newGroup, error: groupErr } = await supabase
+          .from('groups')
+          .insert(insertData)
+          .select()
+          .single();
 
-      // Add creator as admin
-      await supabase.from('group_members').insert({
-        group_id: newGroup.id,
-        user_id: data.userId,
-        role: 'admin',
-      });
+        if (groupErr && groupErr.message?.toLowerCase().includes('column')) {
+          // Retry with core columns only if category or cover_gradient columns are not yet migrated
+          const retryRes = await supabase
+            .from('groups')
+            .insert({
+              name: data.name.trim(),
+              description: data.description?.trim() || '',
+              currency: (data.currency || 'LKR').toUpperCase(),
+              created_by: currentAuthUserId,
+            })
+            .select()
+            .single();
+          newGroup = retryRes.data;
+          groupErr = retryRes.error;
+        }
 
-      // Add initial invited members if provided
-      if (Array.isArray(data.memberNames) && data.memberNames.length > 0) {
-        for (const mName of data.memberNames) {
-          const clean = mName.trim();
-          if (clean && clean !== data.userId) {
-            // Check if profile exists
-            const { data: existingProfile } = await supabase
-              .from('profiles')
-              .select('id, name, email')
-              .or(`email.ilike.${clean},name.ilike.${clean}`)
-              .maybeSingle();
+        if (groupErr || !newGroup) throw groupErr || new Error('Failed to create group');
+        createdGroupObj = newGroup;
 
-            if (existingProfile && existingProfile.id !== data.userId) {
-              await supabase.from('group_members').insert({
-                group_id: newGroup.id,
-                user_id: existingProfile.id,
-                role: 'member',
-              });
-            } else {
-              await supabase.from('group_members').insert({
-                group_id: newGroup.id,
-                invited_name: clean,
-                role: 'member',
-              });
+        // Add creator as admin
+        await supabase.from('group_members').insert({
+          group_id: newGroup.id,
+          user_id: currentAuthUserId,
+          role: 'admin',
+        });
+
+        // Add initial invited members if provided
+        if (Array.isArray(data.memberNames) && data.memberNames.length > 0) {
+          for (const mName of data.memberNames) {
+            const clean = mName.trim();
+            if (clean && clean !== currentAuthUserId) {
+              // Check if profile exists by email or name/full_name
+              const { data: existingProfile } = await supabase
+                .from('profiles')
+                .select('*')
+                .or(`email.ilike.${clean},name.ilike.${clean},full_name.ilike.${clean}`)
+                .maybeSingle();
+
+              if (existingProfile && existingProfile.id !== currentAuthUserId) {
+                await supabase.from('group_members').insert({
+                  group_id: newGroup.id,
+                  user_id: existingProfile.id,
+                  role: 'member',
+                });
+              } else {
+                const { error: invErr } = await supabase.from('group_members').insert({
+                  group_id: newGroup.id,
+                  invited_name: clean,
+                  role: 'member',
+                });
+                if (invErr) {
+                  console.warn('Could not insert unconfirmed guest without profile:', invErr.message);
+                }
+              }
             }
           }
         }
@@ -478,13 +445,14 @@ export const supabaseApi = {
 
       // Log group created activity
       await supabase.from('activities').insert({
-        group_id: newGroup.id,
+        group_id: createdGroupObj.id,
         type: 'group_created',
         actor_name: 'You',
-        description: `created group "${newGroup.name}"`,
-      });
+        description: `created group "${createdGroupObj.name}"`,
+      }).catch(() => {});
 
-      return mapGroupFromDb(newGroup, []);
+      const fresh = await this.getGroupById(createdGroupObj.id);
+      return fresh || mapGroupFromDb(createdGroupObj, []);
     } catch (err) {
       console.error('Supabase createGroup error:', err);
       return null;
@@ -541,8 +509,16 @@ export const supabaseApi = {
       if (cleanEmail) {
         const { data: prof } = await supabase
           .from('profiles')
-          .select('id, name, email')
+          .select('*')
           .eq('email', cleanEmail)
+          .maybeSingle();
+        matchedProfile = prof;
+      }
+      if (!matchedProfile && cleanName) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('*')
+          .or(`full_name.ilike.${cleanName},name.ilike.${cleanName}`)
           .maybeSingle();
         matchedProfile = prof;
       }
@@ -659,7 +635,7 @@ export const supabaseApi = {
         .from('expenses')
         .select(`
           *,
-          profiles:payer_id ( id, name, avatar, initials ),
+          profiles:payer_id (*),
           expense_splits (
             id,
             user_id,
@@ -668,7 +644,7 @@ export const supabaseApi = {
             amount,
             percentage,
             shares,
-            profiles:user_id ( id, name, avatar ),
+            profiles:user_id (*),
             group_members:member_id ( id, invited_name, invited_email )
           ),
           expense_items (
@@ -693,14 +669,14 @@ export const supabaseApi = {
         .from('expenses')
         .select(`
           *,
-          profiles:payer_id ( id, name, avatar, initials ),
+          profiles:payer_id (*),
           expense_splits (
             id,
             user_id,
             amount,
             percentage,
             shares,
-            profiles:user_id ( id, name )
+            profiles:user_id (*)
           ),
           expense_items (
             id,
@@ -798,13 +774,14 @@ export const supabaseApi = {
       if (expenseData.payerId) {
         const { data: prof } = await supabase
           .from('profiles')
-          .select('id, name')
+          .select('*')
           .eq('id', expenseData.payerId)
           .maybeSingle();
 
         if (prof) {
+          const ep = extractProfile(prof);
           payerIdToInsert = prof.id;
-          payerNameToInsert = prof.name;
+          payerNameToInsert = ep?.name || 'Member';
         } else {
           const { data: gm } = await supabase
             .from('group_members')
@@ -852,13 +829,14 @@ export const supabaseApi = {
           if (s.userId) {
             const { data: prof } = await supabase
               .from('profiles')
-              .select('id, name')
+              .select('*')
               .eq('id', s.userId)
               .maybeSingle();
 
             if (prof) {
+              const ep = extractProfile(prof);
               sUserId = prof.id;
-              sInvitedName = prof.name;
+              sInvitedName = ep?.name || 'Member';
             } else {
               const { data: gm } = await supabase
                 .from('group_members')
@@ -917,13 +895,14 @@ export const supabaseApi = {
 
               const { data: prof } = await supabase
                 .from('profiles')
-                .select('id, name')
+                .select('*')
                 .eq('id', uid)
                 .maybeSingle();
 
               if (prof) {
+                const ep = extractProfile(prof);
                 aUserId = prof.id;
-                aInvitedName = prof.name;
+                aInvitedName = ep?.name || 'Member';
               } else {
                 const { data: gm } = await supabase
                   .from('group_members')
@@ -1008,13 +987,14 @@ export const supabaseApi = {
         // Resolve profile or member
         const { data: prof } = await supabase
           .from('profiles')
-          .select('id, name')
+          .select('*')
           .eq('id', expenseData.payerId)
           .maybeSingle();
 
         if (prof) {
+          const ep = extractProfile(prof);
           updates.payer_id = prof.id;
-          updates.payer_name = prof.name;
+          updates.payer_name = ep?.name || 'Member';
         } else {
           const { data: gm } = await supabase
             .from('group_members')
@@ -1052,13 +1032,14 @@ export const supabaseApi = {
           if (s.userId) {
             const { data: prof } = await supabase
               .from('profiles')
-              .select('id, name')
+              .select('*')
               .eq('id', s.userId)
               .maybeSingle();
 
             if (prof) {
+              const ep = extractProfile(prof);
               sUserId = prof.id;
-              sInvitedName = prof.name;
+              sInvitedName = ep?.name || 'Member';
             } else {
               const { data: gm } = await supabase
                 .from('group_members')
@@ -1117,13 +1098,14 @@ export const supabaseApi = {
 
               const { data: prof } = await supabase
                 .from('profiles')
-                .select('id, name')
+                .select('*')
                 .eq('id', uid)
                 .maybeSingle();
 
               if (prof) {
+                const ep = extractProfile(prof);
                 aUserId = prof.id;
-                aInvitedName = prof.name;
+                aInvitedName = ep?.name || 'Member';
               } else {
                 const { data: gm } = await supabase
                   .from('group_members')

@@ -95,20 +95,17 @@ const defaultUser: User = {
   initials: 'KP',
 };
 
+const emptyUser: User = {
+  id: '',
+  name: 'User',
+  email: '',
+  avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+  initials: 'U',
+};
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User>(defaultUser);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [currentGroupId, setCurrentGroupId] = useState<string>('grp_ella_weekend');
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [settlements, setSettlements] = useState<SettlementPayment[]>([]);
-  const [activities, setActivities] = useState<ActivityItem[]>([]);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [preferredCurrency, setPreferredCurrency] = useState<string>('LKR');
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem('smartsplit_demo_mode') === 'true';
@@ -116,6 +113,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     }
   });
+
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    try {
+      return localStorage.getItem('smartsplit_demo_mode') === 'true' ? defaultUser : emptyUser;
+    } catch {
+      return emptyUser;
+    }
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [currentGroupId, setCurrentGroupId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('smartsplit_demo_mode') === 'true' ? 'grp_ella_weekend' : '';
+    } catch {
+      return '';
+    }
+  });
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [settlements, setSettlements] = useState<SettlementPayment[]>([]);
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [preferredCurrency, setPreferredCurrency] = useState<string>('LKR');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   // Toast dispatch
   const dismissToast = useCallback((id: string) => {
@@ -169,6 +190,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     let avatar =
       sessionUser.user_metadata?.avatar ||
+      sessionUser.user_metadata?.avatar_url ||
       'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80';
 
     let initials = name
@@ -179,24 +201,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       .toUpperCase();
 
     try {
+      // Query with wildcard to safely support both full_name/name and avatar_url/avatar schemas
       const { data: profile, error } = await supabase
         .from('profiles')
-        .select('id, name, email, avatar, initials, preferred_currency')
+        .select('*')
         .eq('id', sessionUser.id)
-        .single();
+        .maybeSingle();
 
       if (!error && profile) {
-        name = profile.name || name;
-        avatar = profile.avatar || avatar;
-        initials = profile.initials || initials;
+        name = profile.full_name || profile.name || name;
+        avatar = profile.avatar_url || profile.avatar || avatar;
+        initials = profile.initials || name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
         if (profile.preferred_currency) {
           setPreferredCurrency(profile.preferred_currency);
         }
       } else {
-        // Upsert fallback profile if trigger was delayed
-        await supabase
+        // Upsert fallback profile with compatible columns
+        const upsertPayload: any = {
+          id: sessionUser.id,
+          email: sessionUser.email,
+          full_name: name,
+          avatar_url: avatar,
+        };
+        const { error: upsertErr } = await supabase
           .from('profiles')
-          .upsert(
+          .upsert(upsertPayload, { onConflict: 'id' });
+
+        if (upsertErr && upsertErr.message?.toLowerCase().includes('column')) {
+          // Fallback if schema uses name / avatar instead of full_name / avatar_url
+          await supabase.from('profiles').upsert(
             {
               id: sessionUser.id,
               name,
@@ -205,7 +238,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               initials,
             },
             { onConflict: 'id' }
-          );
+          ).catch(() => {});
+        }
       }
     } catch (err) {
       console.warn('Profile sync notice:', err);
@@ -239,6 +273,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (isMounted) {
             setIsAuthenticated(wasInDemo);
             setIsDemoMode(wasInDemo);
+            setCurrentUser(wasInDemo ? defaultUser : emptyUser);
             setIsLoading(false);
           }
           return;
@@ -268,6 +303,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setCurrentUser(userObj);
             setIsAuthenticated(true);
             setIsDemoMode(false);
+            await refreshData(userObj.id);
           }
         } else if (isMounted) {
           // Check if user previously logged in via Instant Demo Mode
@@ -283,6 +319,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           } else {
             setIsAuthenticated(false);
             setIsDemoMode(false);
+            setCurrentUser(emptyUser);
+            setGroups([]);
+            setCurrentGroupId('');
           }
         }
       } catch (err) {
@@ -314,6 +353,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setCurrentUser(userObj);
           setIsAuthenticated(true);
           setIsDemoMode(false);
+          await refreshData(userObj.id);
         }
       } else if (event === 'SIGNED_OUT') {
         try {
@@ -322,7 +362,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (isMounted) {
           setIsAuthenticated(false);
           setIsDemoMode(false);
-          setCurrentUser(defaultUser);
+          setCurrentUser(emptyUser);
+          setGroups([]);
+          setCurrentGroupId('');
+          setExpenses([]);
+          setActivities([]);
+          setNotifications([]);
+          setSettlements([]);
         }
       }
     });
@@ -336,7 +382,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // ============================================================================
   // DATA REFRESH
   // ============================================================================
-  const refreshData = async () => {
+  const refreshData = async (activeUserId?: string) => {
     try {
       setIsLoading(true);
 
@@ -345,12 +391,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let loadedNotifications: NotificationItem[] = [];
       let loadedSettlements: SettlementPayment[] = [];
 
+      const currentUid = activeUserId || currentUser.id;
+
       // 1. If real user is authenticated in Supabase, load live user groups
       if (isSupabaseConfigured && !isDemoMode) {
         const [sbGroups, sbActs, sbNotifs, sbStls] = await Promise.all([
           supabaseApi.getGroups(),
           supabaseApi.getActivities(),
-          supabaseApi.getNotifications(currentUser.id),
+          currentUid ? supabaseApi.getNotifications(currentUid) : Promise.resolve([]),
           supabaseApi.getSettlements(),
         ]);
 
@@ -394,7 +442,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setSettlements(loadedSettlements);
 
       // Fetch expenses for the current active group
-      const targetGroupId = currentGroupId || (loadedGroups[0]?.id ?? 'grp_ella_weekend');
+      const targetGroupId = currentGroupId || (loadedGroups[0]?.id ?? '');
       if (targetGroupId) {
         if (isSupabaseConfigured && !isDemoMode) {
           const sbExpenses = await supabaseApi.getExpenses(targetGroupId);
@@ -407,6 +455,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setExpenses(expRes.expenses);
           }
         }
+      } else {
+        setExpenses([]);
       }
     } catch (err) {
       console.warn('Data sync notice:', err);

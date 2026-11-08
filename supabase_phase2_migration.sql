@@ -4,8 +4,12 @@
 
 -- 1. Support Invited Members (Who haven't registered yet)
 ALTER TABLE public.group_members ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'member';
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS invited_name TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS invited_email TEXT;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ DEFAULT NOW();
 
 -- Prevent duplicate invites by email within the same group
 CREATE UNIQUE INDEX IF NOT EXISTS idx_group_members_unique_invited_email

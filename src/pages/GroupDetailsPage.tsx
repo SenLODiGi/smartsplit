@@ -181,21 +181,58 @@ export const GroupDetailsPage: React.FC = () => {
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberName.trim()) {
+    const nameToAdd = newMemberName.trim();
+    const emailToAdd = newMemberEmail.trim();
+
+    if (!nameToAdd) {
       showToast('Please enter member name.', 'error');
       return;
     }
-    const ok = await addMemberToGroup(group.id, newMemberName.trim(), newMemberEmail.trim());
+
+    const ok = await addMemberToGroup(group.id, nameToAdd, emailToAdd);
     if (ok) {
       setShowInviteModal(false);
       setNewMemberName('');
       setNewMemberEmail('');
+
+      // Optimistically update current group members state immediately
+      setGroup((prev) => {
+        if (!prev) return prev;
+        const alreadyExists = prev.members.some(
+          (m) =>
+            m.name.toLowerCase() === nameToAdd.toLowerCase() ||
+            (emailToAdd && m.email && m.email.toLowerCase() === emailToAdd.toLowerCase())
+        );
+        if (alreadyExists) return prev;
+        const newM: GroupMember = {
+          id: `guest_${Date.now()}`,
+          userId: `guest_${Date.now()}`,
+          name: nameToAdd,
+          email: emailToAdd,
+          avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+          initials: nameToAdd.slice(0, 2).toUpperCase(),
+          role: 'member',
+        };
+        return {
+          ...prev,
+          members: [...prev.members, newM],
+        };
+      });
     }
   };
 
   const handleRemoveMember = async (memberId: string, memberName: string) => {
     if (window.confirm(`Are you sure you want to remove ${memberName} from this group?`)) {
-      await removeMemberFromGroup(group.id, memberId);
+      const res = await removeMemberFromGroup(group.id, memberId);
+      if (res.success) {
+        setGroup((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            members: prev.members.filter((m) => m.id !== memberId && m.userId !== memberId),
+          };
+        });
+      }
     }
   };
 

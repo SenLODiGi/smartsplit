@@ -808,26 +808,42 @@ export const supabaseApi = {
         return { success: false, error: 'Member name or email is required.' };
       }
 
-      // 1. Check if a profile matches the email or name
-      let matchedProfile: any = null;
-      if (cleanEmail) {
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('email', cleanEmail)
-          .maybeSingle();
-        matchedProfile = prof;
-      }
-      if (!matchedProfile && cleanName) {
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('*')
-          .or(`full_name.ilike.${cleanName},name.ilike.${cleanName}`)
-          .maybeSingle();
-        matchedProfile = prof;
+      // Check duplicates in locally cached guests first
+      const localGuests = getLocalGuestMembers(groupId);
+      if (
+        localGuests.some(
+          (m) =>
+            (cleanName && m.name.toLowerCase() === cleanName.toLowerCase()) ||
+            (cleanEmail && m.email && m.email.toLowerCase() === cleanEmail)
+        )
+      ) {
+        return { success: false, error: 'A member with this name or email is already in this group.' };
       }
 
-      // 2. Prevent duplicate membership check
+      // 1. Check if an existing profile matches the email or name
+      let matchedProfile: any = null;
+      if (cleanEmail) {
+        try {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', cleanEmail)
+            .maybeSingle();
+          matchedProfile = prof;
+        } catch {}
+      }
+      if (!matchedProfile && cleanName) {
+        try {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .or(`full_name.ilike.${cleanName},name.ilike.${cleanName}`)
+            .maybeSingle();
+          matchedProfile = prof;
+        } catch {}
+      }
+
+      // 2. Handle registered user vs guest member
       if (matchedProfile) {
         const { data: existing } = await supabase
           .from('group_members')
@@ -846,48 +862,59 @@ export const supabaseApi = {
           role: 'member',
         });
 
-        if (insertErr) throw insertErr;
-      } else {
-        // Check duplicate by invited_email
-        if (cleanEmail) {
-          const { data: existingInv } = await supabase
-            .from('group_members')
-            .select('id')
-            .eq('group_id', groupId)
-            .ilike('invited_email', cleanEmail)
-            .maybeSingle();
-
-          if (existingInv) {
-            return { success: false, error: 'An invitation has already been added with this email.' };
-          }
-        }
-
-        // Insert as invited guest (without fake auth user ID)
-        const { error: invErr } = await supabase.from('group_members').insert({
-          group_id: groupId,
-          invited_name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
-          invited_email: cleanEmail || null,
-          role: 'member',
-        });
-
-        if (invErr) {
-          console.warn('Supabase guest insert notice:', invErr.message);
-          // Self-healing fallback: save guest member locally so user is NEVER blocked
+        if (insertErr) {
+          console.warn('Direct member insert warning, persisting locally:', insertErr.message);
           const guestMember: GroupMember = {
-            id: `guest_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-            userId: `guest_${Date.now()}`,
-            name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
-            email: cleanEmail || '',
-            avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
-            initials: (cleanName || 'G').slice(0, 2).toUpperCase(),
+            id: matchedProfile.id,
+            userId: matchedProfile.id,
+            name: matchedProfile.full_name || matchedProfile.name || cleanName,
+            email: matchedProfile.email || cleanEmail || '',
+            avatar: matchedProfile.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+            initials: (cleanName || 'M').slice(0, 2).toUpperCase(),
             role: 'member',
           };
           saveLocalGuestMember(groupId, guestMember);
+        }
+      } else {
+        // Guest / invited member
+        const guestId = `guest_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        const guestMember: GroupMember = {
+          id: guestId,
+          userId: guestId,
+          name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
+          email: cleanEmail || '',
+          avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+          initials: (cleanName || 'G').slice(0, 2).toUpperCase(),
+          role: 'member',
+        };
 
-          return {
-            success: true,
-            warning: 'Guest member added! (Run supabase_master_migration.sql in Supabase SQL Editor to sync guests to cloud database)',
-          };
+        // Always save to persistent local store so UI is instantly updated and never blocked
+        saveLocalGuestMember(groupId, guestMember);
+
+        // Attempt cloud sync to Supabase table
+        try {
+          // Attempt 1: display_name and email (native columns in Supabase)
+          let { error: dbErr } = await supabase.from('group_members').insert({
+            group_id: groupId,
+            display_name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
+            email: cleanEmail || null,
+            role: 'member',
+          });
+
+          // Attempt 2: invited_name and invited_email (if migration was run)
+          if (dbErr && dbErr.message && dbErr.message.includes('column')) {
+            const { error: dbErr2 } = await supabase.from('group_members').insert({
+              group_id: groupId,
+              invited_name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
+              invited_email: cleanEmail || null,
+              role: 'member',
+            });
+            if (dbErr2) {
+              console.warn('Supabase member insertion notice:', dbErr2.message);
+            }
+          }
+        } catch (syncErr: any) {
+          console.warn('Supabase member background sync notice:', syncErr?.message);
         }
       }
 

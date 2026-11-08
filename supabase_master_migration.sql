@@ -39,6 +39,8 @@ ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAUL
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.group_members ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'member';
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS invited_name TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS invited_email TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ DEFAULT NOW();

@@ -1,5 +1,5 @@
 import { createWorker } from 'tesseract.js';
-import { OCRResult, ExpenseItem } from '../types';
+import { OCRResult, ExpenseItem, ReceiptMetadata } from '../types';
 
 export interface OCRProgressCallback {
   (status: string, progress: number): void;
@@ -200,30 +200,238 @@ export async function runLocalTesseractOCR(
 }
 
 // Culinary and retail indicator keywords (protect legitimate products from address false positives)
-const FOOD_BEVERAGE_INDICATORS = /\b(?:kottu|roti|curry|meal|dhal|paan|sambol|lager|juice|water|rice|noodle|biriyani|hopper|pizza|burger|sandwich|pasta|steak|soup|salad|chicken|fish|prawn|mutton|beef|pork|cheese|egg|coffee|tea|shake|dessert|ice\s*cream|cake|brownie|beer|wine|soda|coke|sprite|portion|side|dish|special|combo|sub|bread|butter|jam|milk|biscuit|snack|roll|pastry|pie|fries|chips|nuggets|wrap|heineken|carlsberg|lion|mojito|margarita|espresso|latte|cappuccino)\b/i;
+export const FOOD_BEVERAGE_INDICATORS = /\b(?:kottu|roti|curry|meal|dhal|paan|sambol|lager|juice|water|rice|noodle|biriyani|hopper|pizza|burger|sandwich|pasta|steak|soup|salad|chicken|fish|prawn|mutton|beef|pork|cheese|egg|coffee|tea|shake|dessert|ice\s*cream|cake|brownie|beer|wine|soda|coke|sprite|portion|side|dish|special|combo|sub|bread|butter|jam|milk|biscuit|snack|roll|pastry|pie|fries|chips|nuggets|wrap|heineken|carlsberg|lion|mojito|margarita|espresso|latte|cappuccino)\b/i;
 
 // Regular expressions for detecting and capturing receipt metadata
-const PHONE_REGEX = /(?:tel|telephone|phone|ph|mobile|mob|hotline|fax|contact)\s*[:.]?\s*([+\d\s()-]{7,20})|(?:\+94|0094)\s*[\d\s-]{8,12}|\b0(?:11|7[0-8]|81|91|2\d|3\d|4\d|5\d)[\d\s-]{7,10}\b/i;
-const DATE_REGEX = /\b(?:date|dated|dt)?\s*[:.]?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4}|20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})\b/i;
-const TIME_REGEX = /\b(?:time\s*[:.]?\s*)?(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)\b/i;
-const TABLE_REGEX = /\b(?:table|tbl|tab|table\s*no\.?)\s*[:#-]?\s*([A-Za-z0-9-]+)\b/i;
-const SERVER_REGEX = /\b(?:server|waiter|steward|cashier|operator|staff|clerk)\s*[:.-]?\s*([A-Za-z0-9]+)\b/i;
-const RECEIPT_NO_REGEX = /\b(?:receipt|bill|invoice|inv|order|token|check|chk|trans|txn)\s*(?:#|no\.?|num|number)?\s*[:.-]?\s*([A-Za-z0-9-]+)\b/i;
-const TAX_NO_REGEX = /\b(?:vat|tin|svat|brn|reg|gst|sscl|nbt)\s*(?:#|no\.?|reg|number)?\s*[:.-]?\s*([A-Za-z0-9-]+)\b/i;
+export const PHONE_REGEX = /(?:tel|telephone|phone|ph|mobile|mob|hotline|fax|contact)\s*[:.]?\s*([+\d\s()-]{7,20})|(?:\+94|0094)\s*[\d\s-]{6,15}|\b0(?:11|7[0-8]|81|91|2\d|3\d|4\d|5\d)[\d\s-]{6,12}\b/i;
+export const DATE_REGEX = /\b(?:date|dated|dt)?\s*[:.]?\s*(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4}|20\d{2}[-/.]\d{1,2}[-/.]\d{1,2})\b/i;
+export const TIME_REGEX = /\b(?:time\s*[:.]?\s*)?(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)\b/i;
+export const TABLE_REGEX = /\b(?:table|tbl|tab|table\s*no\.?)\s*[:#-]?\s*([A-Za-z0-9-]+)\b/i;
+export const SERVER_REGEX = /\b(?:server|waiter|steward|cashier|operator|staff|clerk)\s*[:.-]?\s*([A-Za-z0-9]+)\b/i;
+export const RECEIPT_NO_REGEX = /\b(?:receipt|bill|invoice|inv|order|token|check|chk|trans|txn)\s*(?:#|no\.?|num|number)?\s*[:.-]?\s*([A-Za-z0-9-]+)\b/i;
+export const TAX_NO_REGEX = /\b(?:vat|tin|svat|brn|reg|gst|sscl|nbt)\s*(?:#|no\.?|reg|number)?\s*[:.-]?\s*([A-Za-z0-9-]+)\b/i;
 
-const STREET_INDICATORS = /\b(?:galle\s*road|main\s*street|beach\s*road|temple\s*road|high\s*level\s*road|baseline\s*road|duplication\s*road|kandy\s*road|negombo\s*road|peradeniya\s*road|havelock\s*road|reid\s*avenue|bauddhaloka\s*mawatha|dharmapala\s*mawatha)\b|\b(?:road|rd\.?|street|st\.?|lane|ln\.?|avenue|ave\.?|mawatha|mw\.?|place|pl\.?|drive|dr\.?|highway|bldg|building|floor|suite|apt|apartment|po\s*box|p\.o\.\s*box)\b/i;
-const CITY_COUNTRY_INDICATORS = /\b(?:colombo\s*(?:0?[1-9]|1[0-5])?|kandy|galle|negombo|ella|mirissa|jaffna|matara|kurunegala|nuwara\s*eliya|batticaloa|bentota|hikkaduwa|sri\s*lanka)\b/i;
+export const STREET_INDICATORS = /\b(?:galle\s*road|main\s*street|beach\s*road|temple\s*road|high\s*level\s*road|baseline\s*road|duplication\s*road|kandy\s*road|negombo\s*road|peradeniya\s*road|havelock\s*road|reid\s*avenue|bauddhaloka\s*mawatha|dharmapala\s*mawatha)\b|\b(?:road|rd\.?|street|st\.?|lane|ln\.?|avenue|ave\.?|mawatha|mw\.?|place|pl\.?|drive|dr\.?|highway|bldg|building|floor|suite|apt|apartment|po\s*box|p\.o\.\s*box)\b/i;
+export const CITY_COUNTRY_INDICATORS = /\b(?:colombo\s*(?:0?[1-9]|1[0-5])?|kandy|galle|negombo|ella|mirissa|jaffna|matara|kurunegala|nuwara\s*eliya|batticaloa|bentota|hikkaduwa|sri\s*lanka)\b/i;
 
-function cleanMonetaryNumber(str: string): number {
+export function cleanMonetaryNumber(str: string): number {
   return parseFloat(str.replace(/,/g, '').replace(/[^\d.]/g, '')) || 0;
+}
+
+export function extractTrailingMonetaryNumber(str: string): { amount: number; rawMatched: string } | null {
+  const matches = str.match(/(?:(?:rs\.?|lkr|\$|€|£)\s*)?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$/i);
+  if (!matches || matches.length === 0) return null;
+  const amount = cleanMonetaryNumber(matches[1]);
+  return amount > 0 && amount < 10000000 ? { amount, rawMatched: matches[0] } : null;
+}
+
+export type LineCategory = 'RECEIPT_METADATA' | 'PURCHASED_ITEM' | 'TOTAL_INFO' | 'OTHER';
+
+export interface ClassifiedLine {
+  line: string;
+  category: LineCategory;
+  type: string;
+  metadataField?: keyof ReceiptMetadata;
+  extractedValue?: string | number;
+}
+
+/**
+ * Robust line classifier categorizing every OCR text line into:
+ * A. RECEIPT_METADATA (Business, Address, Phone, Date/Time, Table, Receipt/Trans #, Tax #)
+ * B. PURCHASED_ITEM (Food, Drinks, Groceries, Goods)
+ * C. TOTAL_INFO (Subtotal, Tax, VAT, Service Charge, Discount, Grand Total)
+ * D. OTHER (Separators, Column Headers, Payment Info, Greetings, Footers)
+ */
+export function classifyReceiptLine(
+  rawLine: string,
+  index: number,
+  allLines: string[],
+  currentMetadata: ReceiptMetadata
+): ClassifiedLine {
+  const line = rawLine.trim();
+  const lower = line.toLowerCase();
+
+  // 1. Category D: OTHER (Separators, Headers, Payment, Footers)
+  if (/^[-=_*#~.\s]{3,}$/.test(line)) {
+    return { line, category: 'OTHER', type: 'SEPARATOR' };
+  }
+
+  // Column Headers (e.g. "Item Qty Price Amount")
+  const headerKeywords = ['item', 'desc', 'description', 'qty', 'quantity', 'price', 'rate', 'amount', 'total'];
+  const headerMatches = headerKeywords.filter((w) => lower.includes(w)).length;
+  if (headerMatches >= 2 && !/[0-9]{2,}/.test(line)) {
+    return { line, category: 'OTHER', type: 'COLUMN_HEADER' };
+  }
+
+  // Payment / Tender / Change
+  if (/^(?:cash|change|balance|paid|tendered|visa|mastercard|amex|debit|credit|auth\s*code|eftpos)\b/i.test(lower)) {
+    return { line, category: 'OTHER', type: 'PAYMENT_INFO' };
+  }
+
+  // Promotional greetings / Footers
+  if (
+    /^(?:thank\s*you|visit\s*again|welcome|feedback|have\s*a\s*(?:nice|pleasant|great)\s*day|powered\s*by|printed\s*on|customer\s*copy|merchant\s*copy|original|duplicate)/i.test(
+      lower
+    )
+  ) {
+    return { line, category: 'OTHER', type: 'FOOTER_PROMO' };
+  }
+
+  // 2. Category C: TOTAL_INFO
+  // Service Charge
+  if (
+    lower.includes('service charge') ||
+    lower.includes('svc chg') ||
+    lower.includes('service 10%') ||
+    lower.includes('sc 10%') ||
+    /^(?:service|svc)\s*[:.]?\s*[\d.]+/i.test(lower)
+  ) {
+    const val = extractTrailingMonetaryNumber(line);
+    return { line, category: 'TOTAL_INFO', type: 'SERVICE_CHARGE', extractedValue: val?.amount };
+  }
+
+  // Subtotal
+  if (
+    lower.includes('subtotal') ||
+    lower.includes('sub total') ||
+    lower.includes('sub-total') ||
+    lower.includes('gross amount') ||
+    lower.includes('item total')
+  ) {
+    const val = extractTrailingMonetaryNumber(line);
+    return { line, category: 'TOTAL_INFO', type: 'SUBTOTAL', extractedValue: val?.amount };
+  }
+
+  // Tax / VAT
+  if (
+    (/\b(?:tax|vat|gst|sscl|nbt)\b/i.test(lower) && !lower.includes('invoice') && !lower.includes('reg') && !lower.includes('tin') && !lower.includes('table')) ||
+    /\bvat\s*\(\d+%\)/i.test(lower)
+  ) {
+    const val = extractTrailingMonetaryNumber(line);
+    if (val && val.amount > 0) {
+      return { line, category: 'TOTAL_INFO', type: 'TAX', extractedValue: val?.amount };
+    }
+  }
+
+  // Discount
+  if (/\b(?:discount|disc|less\s*disc|promo)\b/i.test(lower)) {
+    const val = extractTrailingMonetaryNumber(line);
+    return { line, category: 'TOTAL_INFO', type: 'DISCOUNT', extractedValue: val?.amount };
+  }
+
+  // Grand Total
+  if (
+    lower.includes('grand total') ||
+    lower.includes('net total') ||
+    lower.includes('total amount') ||
+    lower.includes('total due') ||
+    lower.includes('amount due') ||
+    lower.includes('balance due') ||
+    (/^total\b/i.test(lower) && !lower.includes('item'))
+  ) {
+    const val = extractTrailingMonetaryNumber(line);
+    return { line, category: 'TOTAL_INFO', type: 'GRAND_TOTAL', extractedValue: val?.amount };
+  }
+
+  // 3. Category A: RECEIPT_METADATA
+  const hasFoodIndicator = FOOD_BEVERAGE_INDICATORS.test(line);
+
+  // Phone / Contact
+  if (
+    /\b(?:tel|telephone|phone|ph|mobile|mob|hotline|fax|contact)\s*[:.]?/i.test(lower) ||
+    PHONE_REGEX.test(line)
+  ) {
+    if (!hasFoodIndicator) {
+      return { line, category: 'RECEIPT_METADATA', type: 'PHONE', metadataField: 'phone' };
+    }
+  }
+
+  // Date / Time
+  if (
+    /\b(?:date|dated|dt)\s*[:.]?/i.test(lower) ||
+    /\b(?:time)\s*[:.]?/i.test(lower) ||
+    DATE_REGEX.test(line) ||
+    TIME_REGEX.test(line)
+  ) {
+    if (!hasFoodIndicator) {
+      return { line, category: 'RECEIPT_METADATA', type: 'DATETIME', metadataField: 'dateTime' };
+    }
+  }
+
+  // Table / Seating / Staff
+  if (
+    /\b(?:table|tbl|tab|seat)\s*[:#-]?/i.test(lower) ||
+    /\b(?:server|waiter|steward|cashier|operator|station)\s*[:.-]?/i.test(lower)
+  ) {
+    if (!hasFoodIndicator) {
+      return { line, category: 'RECEIPT_METADATA', type: 'TABLE_STAFF', metadataField: 'tableNo' };
+    }
+  }
+
+  // Receipt / Bill / Invoice / Transaction
+  if (
+    /\b(?:receipt|bill|invoice|inv|order|token|check|chk|trans|txn|transaction)\s*(?:#|no\.?|num)?\s*[:.-]?/i.test(lower)
+  ) {
+    if (!hasFoodIndicator) {
+      return { line, category: 'RECEIPT_METADATA', type: 'RECEIPT_TRANS', metadataField: 'receiptNo' };
+    }
+  }
+
+  // Tax Registration / VAT TIN #
+  if (
+    /\b(?:vat|tin|svat|brn|reg|gst|sscl|nbt)\s*(?:#|no\.?|reg|number)\s*[:.-]?/i.test(lower) ||
+    TAX_NO_REGEX.test(line)
+  ) {
+    if (!hasFoodIndicator) {
+      return { line, category: 'RECEIPT_METADATA', type: 'TAX_REG', metadataField: 'taxNo' };
+    }
+  }
+
+  // Street Address
+  if (STREET_INDICATORS.test(line) && !hasFoodIndicator) {
+    return { line, category: 'RECEIPT_METADATA', type: 'ADDRESS', metadataField: 'address' };
+  }
+
+  // City / Country / Postal
+  if (CITY_COUNTRY_INDICATORS.test(line) && !hasFoodIndicator) {
+    return { line, category: 'RECEIPT_METADATA', type: 'CITY_COUNTRY', metadataField: 'city' };
+  }
+
+  // Top Business Name (First 1-3 lines of receipt)
+  if (index < 3 && !currentMetadata.businessName) {
+    const isCleanBusiness =
+      line.length >= 3 &&
+      !/[0-9]{3,}/.test(line) &&
+      !/^(?:welcome|receipt|tax|bill)/i.test(lower) &&
+      !extractTrailingMonetaryNumber(line);
+    if (isCleanBusiness) {
+      return { line, category: 'RECEIPT_METADATA', type: 'BUSINESS_NAME', metadataField: 'businessName' };
+    }
+  }
+
+  // 4. Category B: PURCHASED_ITEM
+  // Must have a valid trailing monetary number (item price)
+  const parsedPrice = extractTrailingMonetaryNumber(line);
+  if (parsedPrice && parsedPrice.amount > 0) {
+    const textBeforePrice = line.slice(0, line.length - parsedPrice.rawMatched.length).trim();
+    if (textBeforePrice.length >= 2 && /[a-zA-Z]/.test(textBeforePrice)) {
+      const isMetadataPrefix = /^(?:tel|phone|date|time|table|tab|server|waiter|cashier|trans|bill|receipt|inv|address|st|road|colombo)\b/i.test(textBeforePrice);
+      if (!isMetadataPrefix) {
+        return { line, category: 'PURCHASED_ITEM', type: 'FOOD_OR_PRODUCT' };
+      }
+    }
+  }
+
+  // Default to OTHER (unclassified / noise)
+  return { line, category: 'OTHER', type: 'UNCLASSIFIED' };
 }
 
 /**
  * Intelligent receipt parser:
- * 1. Accurately identifies and isolates receipt metadata (Address, Phone, Date, Table, Invoice #, etc.)
- * 2. Filters out noise, headers, footers, and summary totals before extracting line items
- * 3. Extracts item description, quantity, unit price, and total price correctly
- * 4. Calculates realistic per-item confidence and flags uncertain items
+ * 1. Accurately classifies every OCR line into RECEIPT_METADATA, PURCHASED_ITEM, TOTAL_INFO, or OTHER
+ * 2. ONLY lines classified as PURCHASED_ITEM are extracted as bill expense_items
+ * 3. Metadata (Address, Phone, Date, Table, Invoice #, etc.) is isolated in ReceiptMetadata
+ * 4. Extracts item description, quantity, unit price, and total price correctly
  * 5. Mathematically checks subtotal, tax, service charge, and grand total
  */
 export function parseReceiptText(
@@ -252,184 +460,73 @@ export function parseReceiptText(
   let tax = 0;
   let total = 0;
 
-  const metadata: any = {};
+  const metadata: ReceiptMetadata = {};
   const items: ExpenseItem[] = [];
   const discrepancies: string[] = [];
 
-  // Helper to extract the last valid monetary number from a line
-  const extractTrailingMonetaryNumber = (str: string): { amount: number; rawMatched: string } | null => {
-    const matches = str.match(/(?:(?:rs\.?|lkr|\$|€|£)\s*)?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$/i);
-    if (!matches || matches.length === 0) return null;
-    const amount = cleanMonetaryNumber(matches[1]);
-    return amount > 0 && amount < 10000000 ? { amount, rawMatched: matches[0] } : null;
-  };
+  // 1. First Pass: Classify all lines and extract Metadata + Totals
+  const classifiedLines: ClassifiedLine[] = [];
 
-  // 1. First Pass: Extract Metadata & Headers across lines
   for (let i = 0; i < allLines.length; i++) {
-    const line = allLines[i];
-    const lower = line.toLowerCase();
+    const cl = classifyReceiptLine(allLines[i], i, allLines, metadata);
+    classifiedLines.push(cl);
 
-    // Merchant Candidate (top 6 lines that are not noise or addresses)
-    if (i < 6 && merchant === 'Restaurant / Merchant') {
-      const cleanCandidate = line.replace(/[^\w\s&'-]/g, '').trim();
-      const isNoise = /^(?:tax invoice|receipt|cash bill|bill|welcome|customer copy|original|duplicate|tel:|phone:|no:|table|st:|street|road|pvt|ltd|reg|gst|vat)/i.test(line);
-      const isAddressLine = STREET_INDICATORS.test(line) || CITY_COUNTRY_INDICATORS.test(line);
-
-      if (cleanCandidate.length >= 3 && !isNoise && !isAddressLine && !/\d{4}/.test(cleanCandidate)) {
-        merchant = cleanCandidate;
-        metadata.businessName = cleanCandidate;
+    if (cl.category === 'RECEIPT_METADATA') {
+      if (cl.type === 'BUSINESS_NAME' && !metadata.businessName) {
+        metadata.businessName = cl.line;
+        merchant = cl.line;
+      } else if (cl.type === 'PHONE' && !metadata.phone) {
+        const phoneMatch = cl.line.match(PHONE_REGEX);
+        metadata.phone = (phoneMatch ? phoneMatch[1] || phoneMatch[0] : cl.line).trim();
+      } else if (cl.type === 'DATETIME' && !metadata.dateTime) {
+        const dateMatch = cl.line.match(DATE_REGEX);
+        const timeMatch = cl.line.match(TIME_REGEX);
+        metadata.dateTime = `${dateMatch ? dateMatch[1] : ''} ${timeMatch ? timeMatch[1] : ''}`.trim() || cl.line;
+        if (dateMatch) {
+          const parsed = new Date(dateMatch[1]);
+          if (!isNaN(parsed.getTime())) date = parsed.toISOString().slice(0, 10);
+        }
+      } else if (cl.type === 'TABLE_STAFF') {
+        const tableMatch = cl.line.match(TABLE_REGEX);
+        const serverMatch = cl.line.match(SERVER_REGEX);
+        if (tableMatch && !metadata.tableNo) metadata.tableNo = tableMatch[1].trim();
+        if (serverMatch && !metadata.serverName) metadata.serverName = serverMatch[1].trim();
+        if (!metadata.tableNo && !metadata.serverName) metadata.tableNo = cl.line;
+      } else if (cl.type === 'RECEIPT_TRANS') {
+        const receiptMatch = cl.line.match(RECEIPT_NO_REGEX);
+        if (receiptMatch && !metadata.receiptNo) metadata.receiptNo = receiptMatch[1].trim();
+        if (!metadata.receiptNo) metadata.receiptNo = cl.line;
+      } else if (cl.type === 'TAX_REG') {
+        const taxMatch = cl.line.match(TAX_NO_REGEX);
+        if (taxMatch && !metadata.taxNo) metadata.taxNo = taxMatch[1].trim();
+        if (!metadata.taxNo) metadata.taxNo = cl.line;
+      } else if (cl.type === 'ADDRESS' && !metadata.address) {
+        metadata.address = cl.line;
+      } else if (cl.type === 'CITY_COUNTRY' && !metadata.city) {
+        metadata.city = cl.line;
       }
-    }
-
-    // Phone / Contact
-    const phoneMatch = line.match(PHONE_REGEX);
-    if (phoneMatch && !metadata.phone && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      metadata.phone = (phoneMatch[1] || phoneMatch[0]).trim();
-    }
-
-    // Date & Time
-    const dateMatch = line.match(DATE_REGEX);
-    const timeMatch = line.match(TIME_REGEX);
-    if (dateMatch && !metadata.dateTime) {
-      metadata.dateTime = `${dateMatch[1]} ${timeMatch ? timeMatch[1] : ''}`.trim();
-      const parsed = new Date(dateMatch[1]);
-      if (!isNaN(parsed.getTime())) {
-        date = parsed.toISOString().slice(0, 10);
-      }
-    }
-
-    // Table & Server
-    const tableMatch = line.match(TABLE_REGEX);
-    if (tableMatch && !metadata.tableNo && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      metadata.tableNo = tableMatch[1].trim();
-    }
-
-    const serverMatch = line.match(SERVER_REGEX);
-    if (serverMatch && !metadata.serverName && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      metadata.serverName = serverMatch[1].trim();
-    }
-
-    // Receipt / Invoice #
-    const receiptMatch = line.match(RECEIPT_NO_REGEX);
-    if (receiptMatch && !metadata.receiptNo && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      metadata.receiptNo = receiptMatch[1].trim();
-    }
-
-    // Tax / VAT / TIN #
-    const taxMatch = line.match(TAX_NO_REGEX);
-    if (taxMatch && !metadata.taxNo && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      metadata.taxNo = taxMatch[1].trim();
-    }
-
-    // Address & City lines
-    const hasStreet = STREET_INDICATORS.test(line);
-    const hasCity = CITY_COUNTRY_INDICATORS.test(line);
-    if ((hasStreet || hasCity) && !FOOD_BEVERAGE_INDICATORS.test(line)) {
-      if (hasStreet && !metadata.address) {
-        metadata.address = line.trim();
-      }
-      if (hasCity && !hasStreet && !metadata.city) {
-        metadata.city = line.trim();
-      } else if (hasCity && !metadata.city && !metadata.address) {
-        metadata.city = line.trim();
+    } else if (cl.category === 'TOTAL_INFO') {
+      if (cl.type === 'SUBTOTAL' && typeof cl.extractedValue === 'number') {
+        subtotal = cl.extractedValue;
+      } else if (cl.type === 'SERVICE_CHARGE' && typeof cl.extractedValue === 'number') {
+        serviceCharge = cl.extractedValue;
+      } else if (cl.type === 'TAX' && typeof cl.extractedValue === 'number') {
+        tax = cl.extractedValue;
+      } else if (cl.type === 'GRAND_TOTAL' && typeof cl.extractedValue === 'number') {
+        total = cl.extractedValue;
       }
     }
   }
 
-  // 2. Second Pass: Extract Summary Totals and Line Items
-  for (let idx = 0; idx < allLines.length; idx++) {
-    const line = allLines[idx];
-    const lower = line.toLowerCase();
-
-    // Check for Service Charge
-    if (
-      lower.includes('service charge') ||
-      lower.includes('svc chg') ||
-      lower.includes('service 10%') ||
-      lower.includes('sc 10%') ||
-      /^(?:service|svc)\b/i.test(line)
-    ) {
-      const parsed = extractTrailingMonetaryNumber(line);
-      if (parsed && parsed.amount > 0) serviceCharge = parsed.amount;
+  // 2. Second Pass: Extract Line Items ONLY from Category B (PURCHASED_ITEM)
+  for (let i = 0; i < classifiedLines.length; i++) {
+    const cl = classifiedLines[i];
+    if (cl.category !== 'PURCHASED_ITEM') {
+      // NEVER process metadata, totals, or other noise as purchased items
       continue;
     }
 
-    // Check for Tax / VAT
-    if (
-      (lower.includes('tax') || lower.includes('vat') || lower.includes('gst') || lower.includes('sscl') || lower.includes('nbt')) &&
-      !lower.includes('tax invoice') && !lower.includes('tax no')
-    ) {
-      const parsed = extractTrailingMonetaryNumber(line);
-      if (parsed && parsed.amount > 0) tax = parsed.amount;
-      continue;
-    }
-
-    // Check for Subtotal
-    if (
-      lower.includes('subtotal') ||
-      lower.includes('sub total') ||
-      lower.includes('sub-total') ||
-      lower.includes('gross amount') ||
-      lower.includes('item total')
-    ) {
-      const parsed = extractTrailingMonetaryNumber(line);
-      if (parsed && parsed.amount > 0) subtotal = parsed.amount;
-      continue;
-    }
-
-    // Check for Grand Total
-    if (
-      lower.includes('grand total') ||
-      lower.includes('net total') ||
-      lower.includes('total amount') ||
-      lower.includes('total due') ||
-      lower.includes('amount due') ||
-      lower.includes('balance due') ||
-      (/^total\b/i.test(line) && !lower.includes('subtotal') && !lower.includes('item'))
-    ) {
-      const parsed = extractTrailingMonetaryNumber(line);
-      if (parsed && parsed.amount > 0) total = parsed.amount;
-      continue;
-    }
-
-    // Skip summary lines, payment lines, separators, footers
-    if (
-      /^[-=_*#\s]{3,}$/.test(line) ||
-      /^(?:cash|change|balance|paid|tendered|visa|mastercard|amex|debit|card|auth\s*code)\b/i.test(lower) ||
-      /^(?:thank\s*you|visit\s*again|welcome|feedback|have\s*a\s*nice\s*day|powered\s*by|printed\s*on|customer\s*copy)/i.test(lower)
-    ) {
-      continue;
-    }
-
-    // Skip column headers (e.g. "Item Qty Price Amount")
-    const headerWords = ['item', 'desc', 'description', 'qty', 'quantity', 'price', 'rate', 'amount', 'total'];
-    const headerWordCount = headerWords.filter((w) => lower.includes(w)).length;
-    if (headerWordCount >= 2) {
-      continue;
-    }
-
-    // Skip top metadata lines (Merchant name, Address, City, Phone, Table, Receipt #)
-    if (
-      line.trim() === merchant ||
-      (metadata.address && line.includes(metadata.address)) ||
-      (metadata.city && line.includes(metadata.city))
-    ) {
-      continue;
-    }
-
-    // Skip metadata lines matching patterns when line is NOT a food item
-    const isPhoneLine = PHONE_REGEX.test(line) && !FOOD_BEVERAGE_INDICATORS.test(line);
-    const isDateTimeLine = (DATE_REGEX.test(line) || TIME_REGEX.test(line)) && (/\b(?:date|time|dt|dated)\b/i.test(line) || !FOOD_BEVERAGE_INDICATORS.test(line));
-    const isTableLine = (TABLE_REGEX.test(line) || SERVER_REGEX.test(line)) && !FOOD_BEVERAGE_INDICATORS.test(line);
-    const isReceiptNoLine = RECEIPT_NO_REGEX.test(line) && !FOOD_BEVERAGE_INDICATORS.test(line);
-    const isTaxNoLine = TAX_NO_REGEX.test(line) && !FOOD_BEVERAGE_INDICATORS.test(line);
-    const isAddressLine = (STREET_INDICATORS.test(line) || CITY_COUNTRY_INDICATORS.test(line)) && !FOOD_BEVERAGE_INDICATORS.test(line);
-
-    if (isPhoneLine || isDateTimeLine || isTableLine || isReceiptNoLine || isTaxNoLine || isAddressLine) {
-      continue;
-    }
-
-    // 3. Line Item Candidate Parsing
+    const line = cl.line;
     const parsedPrice = extractTrailingMonetaryNumber(line);
     if (!parsedPrice || parsedPrice.amount <= 0) continue;
 
@@ -441,12 +538,27 @@ export function parseReceiptText(
     let qty = 1;
     let unitPrice = totalPrice;
 
-    // Pattern A: Multi-price format -> "Lion Lager 2 x 800.00" or "Roast Paan 2 @ 200.00"
-    const multiPriceMatch = textBeforePrice.match(/^(.*?)\s+([1-9][0-9]?)\s*(?:x|@|\*)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$/i);
+    // Pattern A1: Multi-price format -> "Lion Lager 2 x 800.00" or "Roast Paan 2 @ 200.00"
+    const multiPriceMatch = textBeforePrice.match(
+      /^(.*?)\s+([1-9][0-9]?)\s*(?:x|@|\*)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$/i
+    );
+    // Pattern A2: Space-separated columns -> "Roast Paan (Portion) 2 250.00"
+    const spaceColMatch = textBeforePrice.match(
+      /^(.*?)\s+([1-9][0-9]?)\s+([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*$/
+    );
+
     if (multiPriceMatch) {
       itemName = multiPriceMatch[1].trim();
       qty = parseInt(multiPriceMatch[2], 10) || 1;
       unitPrice = cleanMonetaryNumber(multiPriceMatch[3]) || Math.round((totalPrice / qty) * 100) / 100;
+    } else if (spaceColMatch) {
+      const candidateQty = parseInt(spaceColMatch[2], 10) || 1;
+      const candidateUnitPrice = cleanMonetaryNumber(spaceColMatch[3]);
+      if (candidateUnitPrice > 0 && Math.abs(candidateQty * candidateUnitPrice - totalPrice) < 1.0) {
+        itemName = spaceColMatch[1].trim();
+        qty = candidateQty;
+        unitPrice = candidateUnitPrice;
+      }
     } else {
       // Pattern B: Trailing column quantity -> "Chicken Kottu Roti    1" or "Roast Paan (Portion)  2"
       const trailingQtyMatch = textBeforePrice.match(/^(.*?)\s+([1-9][0-9]?)\s*$/);
@@ -465,30 +577,29 @@ export function parseReceiptText(
       }
     }
 
-    // Clean leading/trailing symbols from itemName
-    itemName = itemName.replace(/^[-*•.#\d\s]+/, '').replace(/[-*•._\s]+$/, '').trim();
+    // Clean leading bullets or numbering from itemName (preserve branded names like 7-Up)
+    itemName = itemName
+      .replace(/^[-*•#~]+\s*/, '')
+      .replace(/^\d+[\.\)]\s+/, '')
+      .replace(/[-*•._\s]+$/, '')
+      .trim();
 
-    // Final sanity check: must contain letters and not be an address or invoice keyword
-    if (
-      itemName.length >= 2 &&
-      /[a-zA-Z]/.test(itemName) &&
-      !/^(?:address|tel|date|table|server|receipt|invoice|total|tax|subtotal|vat|cashier)\b/i.test(itemName)
-    ) {
-      // Calculate realistic item confidence
+    // Sanity filter: Must have at least 2 characters, contain letters, and not be pure metadata
+    const isMetadataText = /^(?:address|tel|telephone|phone|date|time|table|server|waiter|cashier|receipt|invoice|total|tax|subtotal|vat)\b/i.test(itemName);
+    const hasRoadWithoutFood = (STREET_INDICATORS.test(itemName) || CITY_COUNTRY_INDICATORS.test(itemName)) && !FOOD_BEVERAGE_INDICATORS.test(itemName);
+
+    if (itemName.length >= 2 && /[a-zA-Z]/.test(itemName) && !isMetadataText && !hasRoadWithoutFood) {
       const tesseractConf = lineConfidenceMap.get(line.toLowerCase());
-      let confidence = typeof tesseractConf === 'number' ? tesseractConf : 0.88;
+      let confidence = typeof tesseractConf === 'number' ? tesseractConf : 0.90;
 
       if (Math.abs(qty * unitPrice - totalPrice) < 0.05) {
-        confidence = Math.min(0.98, confidence + 0.08);
+        confidence = Math.min(0.99, confidence + 0.08);
       }
       if (FOOD_BEVERAGE_INDICATORS.test(itemName)) {
         confidence = Math.min(0.99, confidence + 0.04);
       }
 
       const isUncertain = totalPrice < 15 || itemName.length < 3 || /[^\w\s()&'./-]/.test(itemName);
-      if (isUncertain) {
-        confidence = Math.max(0.48, confidence - 0.25);
-      }
 
       items.push({
         id: `item_${Date.now()}_${items.length}`,
@@ -503,7 +614,7 @@ export function parseReceiptText(
     }
   }
 
-  // 4. Mathematical Cross-Checking & Totals
+  // 3. Mathematical Cross-Checking & Totals Verification
   const computedItemsSubtotal = items.reduce((sum, item) => sum + (item.totalPrice || item.quantity * item.unitPrice), 0);
 
   if (subtotal === 0 && computedItemsSubtotal > 0) {

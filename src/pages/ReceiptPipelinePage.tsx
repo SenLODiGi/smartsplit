@@ -647,11 +647,10 @@ export const ReceiptPipelinePage: React.FC = () => {
               <table className="w-full text-xs text-left">
                 <thead className="bg-slate-50 text-slate-500 uppercase font-semibold text-[10px] border-b border-slate-200">
                   <tr>
-                    <th className="p-3">Purchased Food / Product Item</th>
-                    <th className="p-3 text-center">Qty</th>
-                    <th className="p-3 text-right">Unit Price</th>
-                    <th className="p-3 text-right">Total</th>
-                    <th className="p-3 text-right">Confidence</th>
+                    <th className="p-3">Item Description</th>
+                    <th className="p-3 text-center w-16">Qty</th>
+                    <th className="p-3 text-right w-28">Unit Price</th>
+                    <th className="p-3 text-right w-28">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
@@ -673,17 +672,6 @@ export const ReceiptPipelinePage: React.FC = () => {
                       </td>
                       <td className="p-3 text-right font-mono font-bold tabular-nums">
                         {formatCurrency(item.totalPrice, activeOCR.receiptData?.currency)}
-                      </td>
-                      <td className="p-3 text-right font-mono text-[11px]">
-                        <span
-                          className={`font-semibold ${
-                            (item.confidence || 0) < 0.8
-                              ? 'text-amber-600'
-                              : 'text-emerald-600'
-                          }`}
-                        >
-                          {Math.round((item.confidence || 0.98) * 100)}%
-                        </span>
                       </td>
                     </tr>
                   ))}

@@ -6,6 +6,7 @@ import {
   Expense,
   ExpenseSplit,
   ExpenseItem,
+  ExpensePayment,
   SettlementPayment,
   ActivityItem,
   NotificationItem,
@@ -452,17 +453,18 @@ export const supabaseApi = {
           currentAuthUser?.user_metadata?.name ||
           currentAuthUser?.email?.split('@')[0] ||
           'Member';
-        await supabase
-          .from('profiles')
-          .insert({
-            id: currentAuthUserId,
-            email: currentAuthUser?.email || '',
-            name: fallbackName,
-            full_name: fallbackName,
-          })
-          .catch((pErr) => {
-            console.warn('Profile sync on createGroup warning:', pErr.message);
-          });
+        try {
+          await supabase
+            .from('profiles')
+            .insert({
+              id: currentAuthUserId,
+              email: currentAuthUser?.email || '',
+              name: fallbackName,
+              full_name: fallbackName,
+            });
+        } catch (pErr: any) {
+          console.warn('Profile sync on createGroup warning:', pErr?.message);
+        }
       }
 
       const gradientOptions = [
@@ -552,37 +554,42 @@ export const supabaseApi = {
         for (const mName of data.memberNames) {
           const clean = mName.trim();
           if (clean && clean !== currentAuthUserId) {
-            const { data: existingProfile } = await supabase
+            const profileRes: any = await supabase
               .from('profiles')
               .select('*')
               .or(`email.ilike.${clean},name.ilike.${clean},full_name.ilike.${clean}`)
               .maybeSingle();
+            const existingProfile = profileRes?.data;
 
-            if (existingProfile && existingProfile.id !== currentAuthUserId) {
-              await supabase.from('group_members').insert({
-                group_id: newGroup.id,
-                user_id: existingProfile.id,
-                role: 'member',
-              }).catch(() => {});
-            } else {
-              await supabase.from('group_members').insert({
-                group_id: newGroup.id,
-                invited_name: clean,
-                role: 'member',
-              }).catch(() => {});
-            }
+            try {
+              if (existingProfile && existingProfile.id !== currentAuthUserId) {
+                await supabase.from('group_members').insert({
+                  group_id: newGroup.id,
+                  user_id: existingProfile.id,
+                  role: 'member',
+                });
+              } else {
+                await supabase.from('group_members').insert({
+                  group_id: newGroup.id,
+                  invited_name: clean,
+                  role: 'member',
+                });
+              }
+            } catch {}
           }
         }
       }
 
       // 5. Log group created activity
-      await supabase.from('activities').insert({
-        group_id: newGroup.id,
-        type: 'group_created',
-        actor_id: currentAuthUserId,
-        actor_name: currentAuthUser?.user_metadata?.full_name || 'Creator',
-        description: `created group "${newGroup.name}"`,
-      }).catch(() => {});
+      try {
+        await supabase.from('activities').insert({
+          group_id: newGroup.id,
+          type: 'group_created',
+          actor_id: currentAuthUserId,
+          actor_name: currentAuthUser?.user_metadata?.full_name || 'Creator',
+          description: `created group "${newGroup.name}"`,
+        });
+      } catch {}
 
       // 6. Retrieve fully assembled group
       const fresh = await this.getGroupById(newGroup.id);
@@ -1127,12 +1134,11 @@ export const supabaseApi = {
       }
 
       if (paymentsToInsert.length > 0) {
-        await supabase
-          .from('expense_payments')
-          .insert(paymentsToInsert)
-          .catch((pErr) => {
-            console.warn('expense_payments insert notice:', pErr.message);
-          });
+        try {
+          await supabase.from('expense_payments').insert(paymentsToInsert);
+        } catch (pErr: any) {
+          console.warn('expense_payments insert notice:', pErr?.message);
+        }
       }
 
       // Insert items and item assignments if present
@@ -1357,7 +1363,9 @@ export const supabaseApi = {
 
       // Update multiple payer records in expense_payments
       if (expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0) {
-        await supabase.from('expense_payments').delete().eq('expense_id', expenseId).catch(() => {});
+        try {
+          await supabase.from('expense_payments').delete().eq('expense_id', expenseId);
+        } catch {}
 
         const paymentsToInsert: any[] = [];
         for (const p of expenseData.payers) {
@@ -1401,12 +1409,11 @@ export const supabaseApi = {
         }
 
         if (paymentsToInsert.length > 0) {
-          await supabase
-            .from('expense_payments')
-            .insert(paymentsToInsert)
-            .catch((pErr) => {
-              console.warn('expense_payments update notice:', pErr.message);
-            });
+          try {
+            await supabase.from('expense_payments').insert(paymentsToInsert);
+          } catch (pErr: any) {
+            console.warn('expense_payments update notice:', pErr?.message);
+          }
         }
       }
 

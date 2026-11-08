@@ -828,6 +828,7 @@ export const supabaseApi = {
         p_receipt_url: expenseData.receiptUrl || '',
         p_splits: expenseData.splits || [],
         p_items: expenseData.items || [],
+        p_payers: expenseData.payers || [],
       });
 
       if (!rpcErr && rpcData) {
@@ -839,7 +840,14 @@ export const supabaseApi = {
       let payerMemberIdToInsert: string | null = null;
       let payerNameToInsert = 'Member';
 
-      if (expenseData.payerId) {
+      if (expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0) {
+        const firstPayer = expenseData.payers[0];
+        payerIdToInsert = firstPayer.userId;
+        payerNameToInsert =
+          expenseData.payers.length === 1
+            ? firstPayer.userName
+            : expenseData.payers.map((p: any) => p.userName.split(' ')[0]).join(' & ');
+      } else if (expenseData.payerId) {
         const { data: prof } = await supabase
           .from('profiles')
           .select('*')

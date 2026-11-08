@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { ArrowRightLeft, Sparkles, Check, ArrowRight, AlertCircle, Mail } from 'lucide-react';
+import { ArrowRightLeft, Check, ArrowRight, AlertCircle, Mail } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const AuthPage: React.FC = () => {
@@ -58,11 +58,6 @@ export const AuthPage: React.FC = () => {
     }
   };
 
-  const handleDemoSignIn = () => {
-    login();
-    navigate('/dashboard');
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
@@ -84,25 +79,6 @@ export const AuthPage: React.FC = () => {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-6 shadow-sm border border-slate-200 sm:rounded-2xl sm:px-10 space-y-6">
-          {/* Quick Demo Login CTA */}
-          <button
-            type="button"
-            onClick={handleDemoSignIn}
-            className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4 text-indigo-200" />
-            <span>Instant Demo Login (as Kasun Perera)</span>
-          </button>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-200" />
-            </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="px-2 bg-white text-slate-400 font-medium">Or continue with email</span>
-            </div>
-          </div>
-
           {unconfirmedEmail && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs space-y-2">
               <div className="flex items-start gap-2">

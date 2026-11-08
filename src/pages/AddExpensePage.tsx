@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PlusCircle,
+  Plus,
   ScanLine,
   Utensils,
   Plane,
@@ -10,12 +11,20 @@ import {
   Zap,
   MoreHorizontal,
   Check,
+  CheckCircle2,
   AlertCircle,
   ArrowRight,
   RotateCcw,
+  Trash2,
+  Users,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, getAvatarColor } from '../utils/formatters';
+
+interface PayerEntry {
+  userId: string;
+  amount: number | string;
+}
 
 export const AddExpensePage: React.FC = () => {
   const { activeGroup, currentUser, createExpense, showToast } = useApp();
@@ -24,7 +33,6 @@ export const AddExpensePage: React.FC = () => {
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState<string>('12000');
   const [category, setCategory] = useState<'food' | 'transport' | 'lodging' | 'entertainment' | 'utilities' | 'other'>('food');
-  const [payerId, setPayerId] = useState<string>(currentUser.id);
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
   const [splitMethod, setSplitMethod] = useState<'equal' | 'exact' | 'percentage' | 'shares'>('equal');
   const [notes, setNotes] = useState('');
@@ -33,6 +41,9 @@ export const AddExpensePage: React.FC = () => {
   // Group members
   const members = activeGroup?.members || [];
   const parsedAmount = Math.max(0, Number(amount) || 0);
+
+  // Multiple Payer contributions state
+  const [payers, setPayers] = useState<PayerEntry[]>([]);
 
   // Participants in equal split (which members are participating)
   const [participatingUserIds, setParticipatingUserIds] = useState<string[]>([]);
@@ -48,11 +59,13 @@ export const AddExpensePage: React.FC = () => {
       setParticipatingUserIds(members.map((m) => m.userId));
 
       const isCurrentInMembers = members.some((m) => m.userId === currentUser.id);
-      if (isCurrentInMembers) {
-        setPayerId(currentUser.id);
-      } else {
-        setPayerId(members[0].userId);
-      }
+      const defaultPayerId = isCurrentInMembers ? currentUser.id : members[0].userId;
+
+      // Initialize default single payer if none configured
+      setPayers((prev) => {
+        if (prev.length > 0) return prev;
+        return [{ userId: defaultPayerId, amount: parsedAmount || 12000 }];
+      });
 
       const initExact: Record<string, number> = {};
       const initPct: Record<string, number> = {};
@@ -88,6 +101,74 @@ export const AddExpensePage: React.FC = () => {
       setSharesCount(initShares);
     }
   }, [activeGroup?.id, currentUser.id]);
+
+  // When amount changes, if only 1 payer exists, auto-sync their amount
+  const handleAmountChange = (newAmountStr: string) => {
+    setAmount(newAmountStr);
+    const num = Math.max(0, Number(newAmountStr) || 0);
+    setPayers((prev) => {
+      if (prev.length <= 1) {
+        const pId = prev[0]?.userId || (members[0]?.userId ?? currentUser.id);
+        return [{ userId: pId, amount: num }];
+      }
+      return prev;
+    });
+  };
+
+  // Helper: Payer modification handlers
+  const handlePayerChange = (idx: number, field: 'userId' | 'amount', value: any) => {
+    setPayers((prev) => {
+      const copy = [...prev];
+      if (field === 'userId') {
+        if (copy.some((p, i) => i !== idx && p.userId === value)) {
+          showToast('This member is already added as a payer.', 'warning');
+          return prev;
+        }
+        copy[idx] = { ...copy[idx], userId: value };
+      } else {
+        copy[idx] = { ...copy[idx], amount: value };
+      }
+      return copy;
+    });
+  };
+
+  const handleAddPayer = () => {
+    if (payers.length >= members.length) {
+      showToast('All group members are already added as payers.', 'info');
+      return;
+    }
+    const unusedMember = members.find((m) => !payers.some((p) => p.userId === m.userId));
+    if (!unusedMember) return;
+    const currentSum = payers.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+    const remaining = Math.max(0, Math.round((parsedAmount - currentSum) * 100) / 100);
+    setPayers((prev) => [...prev, { userId: unusedMember.userId, amount: remaining > 0 ? remaining : '' }]);
+  };
+
+  const handleRemovePayer = (idx: number) => {
+    if (payers.length <= 1) {
+      showToast('At least one payer is required.', 'warning');
+      return;
+    }
+    setPayers((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAutoDistributePayers = () => {
+    if (payers.length === 0 || parsedAmount <= 0) return;
+    const totalCents = Math.round(parsedAmount * 100);
+    const baseCents = Math.floor(totalCents / payers.length);
+    let remCents = totalCents - baseCents * payers.length;
+    setPayers((prev) =>
+      prev.map((p) => {
+        let cents = baseCents;
+        if (remCents > 0) {
+          cents += 1;
+          remCents -= 1;
+        }
+        return { ...p, amount: cents / 100 };
+      })
+    );
+    showToast('Contributions evenly distributed among selected payers!', 'info');
+  };
 
   // Quick helper to redistribute exact amounts evenly across members
   const handleAutoDistributeExact = () => {
@@ -139,6 +220,9 @@ export const AddExpensePage: React.FC = () => {
   };
 
   // Computations & Validations
+  const sumPayers = payers.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+  const diffPayers = Math.round((parsedAmount - sumPayers) * 100) / 100;
+
   const sumExact = Object.values(exactAmounts).reduce((a, b) => a + Number(b || 0), 0);
   const diffExact = Math.round((parsedAmount - sumExact) * 100) / 100;
 
@@ -165,6 +249,55 @@ export const AddExpensePage: React.FC = () => {
       return;
     }
 
+    // 1. Validate "Who Paid?" Section
+    if (payers.length === 0) {
+      showToast('Please specify at least one contributor in "Who Paid?".', 'error');
+      return;
+    }
+
+    const hasInvalidPayer = payers.some((p) => !p.userId || Number(p.amount) <= 0);
+    if (hasInvalidPayer) {
+      showToast('Every payer must have an assigned member and an amount greater than zero.', 'error');
+      return;
+    }
+
+    const uniquePayerIds = new Set(payers.map((p) => p.userId));
+    if (uniquePayerIds.size !== payers.length) {
+      showToast('Duplicate payer entries detected. Please select distinct group members.', 'error');
+      return;
+    }
+
+    if (Math.abs(diffPayers) > 0.01) {
+      if (diffPayers > 0) {
+        showToast(
+          `Payer contributions are short by ${formatCurrency(diffPayers, activeGroup.currency)}. Total contributions must equal ${formatCurrency(parsedAmount, activeGroup.currency)}.`,
+          'error'
+        );
+      } else {
+        showToast(
+          `Payer contributions exceed total expense by ${formatCurrency(Math.abs(diffPayers), activeGroup.currency)}. Total contributions must equal ${formatCurrency(parsedAmount, activeGroup.currency)}.`,
+          'error'
+        );
+      }
+      return;
+    }
+
+    const formattedPayers = payers.map((p) => {
+      const member = members.find((m) => m.userId === p.userId);
+      return {
+        userId: p.userId,
+        userName: member?.name || 'Member',
+        amount: Math.round(Number(p.amount) * 100) / 100,
+      };
+    });
+
+    const primaryPayer = formattedPayers[0];
+    const payerName =
+      formattedPayers.length === 1
+        ? primaryPayer.userName
+        : formattedPayers.map((p) => p.userName.split(' ')[0]).join(' & ');
+
+    // 2. Validate & Compute Split Allocations
     let splits: any[] = [];
     const totalCents = Math.round(parsedAmount * 100);
 
@@ -276,7 +409,9 @@ export const AddExpensePage: React.FC = () => {
       amount: parsedAmount,
       currency: activeGroup?.currency || 'LKR',
       category,
-      payerId,
+      payerId: primaryPayer.userId,
+      payerName,
+      payers: formattedPayers,
       date,
       splitMethod,
       splits,
@@ -347,68 +482,198 @@ export const AddExpensePage: React.FC = () => {
               step="any"
               required
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => handleAmountChange(e.target.value)}
               className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-indigo-600"
             />
           </div>
         </div>
 
-        {/* Category Picker */}
-        <div>
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-            Category
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {categories.map((cat) => {
-              const Icon = cat.icon;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setCategory(cat.id as any)}
-                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium transition-all ${
-                    category === cat.id
-                      ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-semibold'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon className="w-4 h-4 text-slate-500" />
-                  <span>{cat.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Payer & Date */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Paid By
+        {/* Category Picker & Date */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              Category
             </label>
-            <select
-              value={payerId}
-              onChange={(e) => setPayerId(e.target.value)}
-              className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-            >
-              {members.map((m) => (
-                <option key={m.userId} value={m.userId}>
-                  {m.name} {m.userId === currentUser.id ? '(You)' : ''}
-                </option>
-              ))}
-            </select>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {categories.map((cat) => {
+                const Icon = cat.icon;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setCategory(cat.id as any)}
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium transition-all ${
+                      category === cat.id
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-semibold'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 text-slate-500" />
+                    <span>{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Date
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              Expense Date *
             </label>
             <input
               type="date"
+              required
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
             />
+          </div>
+        </div>
+
+        {/* SECTION: WHO PAID? (Multiple Payers Support) */}
+        <div className="bg-slate-50/80 rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                  Who Paid?
+                </h3>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Record which member or members paid and their contributed amounts.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {payers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleAutoDistributePayers}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  Split Contributions Evenly
+                </button>
+              )}
+              {payers.length < members.length && (
+                <button
+                  type="button"
+                  onClick={handleAddPayer}
+                  className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Another Payer</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Payers List */}
+          <div className="space-y-2.5">
+            {payers.map((payer, idx) => {
+              const selectedMember = members.find((m) => m.userId === payer.userId);
+              return (
+                <div
+                  key={idx}
+                  className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-3 bg-white rounded-xl border border-slate-200 shadow-2xs"
+                >
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${getAvatarColor(
+                        selectedMember?.name || 'Member'
+                      )}`}
+                    >
+                      {selectedMember?.initials || 'U'}
+                    </div>
+                    <select
+                      value={payer.userId}
+                      onChange={(e) => handlePayerChange(idx, 'userId', e.target.value)}
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                    >
+                      {members.map((m) => {
+                        const isTaken = payers.some((p, i) => i !== idx && p.userId === m.userId);
+                        return (
+                          <option key={m.userId} value={m.userId} disabled={isTaken}>
+                            {m.name} {m.userId === currentUser.id ? '(You)' : ''} {isTaken ? '(already added)' : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1 sm:w-44">
+                      <span className="absolute left-3 top-2.5 text-xs font-semibold text-slate-400">
+                        {activeGroup?.currency || 'LKR'}
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        required
+                        value={payer.amount}
+                        onChange={(e) => handlePayerChange(idx, 'amount', e.target.value)}
+                        placeholder="0.00"
+                        className="w-full text-xs pl-12 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-slate-900"
+                      />
+                    </div>
+
+                    {payers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePayer(idx)}
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                        title="Remove payer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Allocation Balance Summary Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-white rounded-xl border border-slate-200 text-xs">
+            <div className="flex items-center gap-4">
+              <div>
+                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider">
+                  Total Bill
+                </span>
+                <span className="font-mono font-bold text-slate-900">
+                  {formatCurrency(parsedAmount, activeGroup?.currency || 'LKR')}
+                </span>
+              </div>
+              <div className="h-6 w-px bg-slate-200" />
+              <div>
+                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider">
+                  Total Contributions
+                </span>
+                <span className="font-mono font-bold text-slate-900">
+                  {formatCurrency(sumPayers, activeGroup?.currency || 'LKR')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {Math.abs(diffPayers) < 0.01 ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Contributions Match (100%)</span>
+                </span>
+              ) : diffPayers > 0 ? (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-xs font-semibold border border-amber-200">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Remaining to allocate: {formatCurrency(diffPayers, activeGroup?.currency || 'LKR')}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 text-xs font-semibold border border-rose-200">
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Exceeds total by {formatCurrency(Math.abs(diffPayers), activeGroup?.currency || 'LKR')}</span>
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

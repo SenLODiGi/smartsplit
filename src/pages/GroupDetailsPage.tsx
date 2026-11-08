@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Users2,
+  Users,
   Receipt,
   PlusCircle,
+  Plus,
   ScanLine,
   Scale,
   Trash2,
@@ -12,6 +14,7 @@ import {
   TrendingUp,
   History,
   Check,
+  CheckCircle2,
   Edit2,
   Settings as SettingsIcon,
   X,
@@ -72,6 +75,7 @@ export const GroupDetailsPage: React.FC = () => {
   const [editExpenseCategory, setEditExpenseCategory] = useState<any>('food');
   const [editExpensePayerId, setEditExpensePayerId] = useState('');
   const [editExpenseDate, setEditExpenseDate] = useState('');
+  const [editExpensePayers, setEditExpensePayers] = useState<Array<{ userId: string; amount: number | string }>>([]);
 
   // Delete Expense confirm modal state
   const [expenseToDelete, setExpenseToDelete] = useState<string | null>(null);
@@ -226,15 +230,117 @@ export const GroupDetailsPage: React.FC = () => {
     setEditExpenseCategory(exp.category);
     setEditExpensePayerId(exp.payerId);
     setEditExpenseDate(exp.date);
+    if (exp.payers && exp.payers.length > 0) {
+      setEditExpensePayers(
+        exp.payers.map((p) => ({
+          userId: p.userId,
+          amount: p.amount,
+        }))
+      );
+    } else {
+      setEditExpensePayers([
+        {
+          userId: exp.payerId || group?.members[0]?.userId || currentUser.id,
+          amount: exp.amount,
+        },
+      ]);
+    }
+  };
+
+  const addEditPayer = () => {
+    if (!group) return;
+    const existingIds = new Set(editExpensePayers.map((p) => p.userId));
+    const available = group.members.find((m) => !existingIds.has(m.userId));
+    if (available) {
+      setEditExpensePayers([...editExpensePayers, { userId: available.userId, amount: '' }]);
+    } else {
+      showToast('All group members are already added as payers.', 'info');
+    }
+  };
+
+  const removeEditPayer = (index: number) => {
+    if (editExpensePayers.length <= 1) {
+      showToast('At least one payer is required.', 'error');
+      return;
+    }
+    setEditExpensePayers(editExpensePayers.filter((_, idx) => idx !== index));
+  };
+
+  const updateEditPayerAmount = (index: number, val: string) => {
+    setEditExpensePayers(
+      editExpensePayers.map((p, idx) => (idx === index ? { ...p, amount: val } : p))
+    );
+  };
+
+  const updateEditPayerUser = (index: number, userId: string) => {
+    setEditExpensePayers(
+      editExpensePayers.map((p, idx) => (idx === index ? { ...p, userId } : p))
+    );
+  };
+
+  const distributeEditPayersEvenly = () => {
+    if (editExpensePayers.length === 0 || editExpenseAmount <= 0) return;
+    const totalCents = Math.round(editExpenseAmount * 100);
+    const count = editExpensePayers.length;
+    const baseCents = Math.floor(totalCents / count);
+    let remCents = totalCents - baseCents * count;
+    setEditExpensePayers(
+      editExpensePayers.map((p) => {
+        let cents = baseCents;
+        if (remCents > 0) {
+          cents += 1;
+          remCents -= 1;
+        }
+        return { ...p, amount: (cents / 100).toFixed(2) };
+      })
+    );
   };
 
   const handleSaveExpenseEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingExpense) return;
+    if (!editingExpense || !group) return;
     if (!editExpenseTitle.trim() || editExpenseAmount <= 0) {
       showToast('Please provide a valid title and positive amount.', 'error');
       return;
     }
+
+    // Validate payers
+    if (editExpensePayers.length === 0) {
+      showToast('Please specify at least one payer.', 'error');
+      return;
+    }
+
+    const payerUserIds = editExpensePayers.map((p) => p.userId);
+    if (new Set(payerUserIds).size !== payerUserIds.length) {
+      showToast('A member cannot be selected more than once as a payer.', 'error');
+      return;
+    }
+
+    for (const p of editExpensePayers) {
+      const amt = Number(p.amount);
+      if (isNaN(amt) || amt <= 0) {
+        showToast('All payers must have a valid positive contribution amount.', 'error');
+        return;
+      }
+    }
+
+    const totalPaid = editExpensePayers.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    if (Math.abs(totalPaid - editExpenseAmount) > 0.01) {
+      showToast(
+        `Total contributions (${formatCurrency(totalPaid, group.currency)}) must equal the expense amount (${formatCurrency(editExpenseAmount, group.currency)}).`,
+        'error'
+      );
+      return;
+    }
+
+    const formattedEditPayers = editExpensePayers.map((p) => {
+      const member = group.members.find((m) => m.userId === p.userId);
+      return {
+        userId: p.userId,
+        userName: member?.name || 'Member',
+        amount: Math.round(Number(p.amount) * 100) / 100,
+      };
+    });
 
     // Recompute equal splits if splitMethod was equal using exact cents
     let updatedSplits = editingExpense.splits;
@@ -261,7 +367,9 @@ export const GroupDetailsPage: React.FC = () => {
       title: editExpenseTitle.trim(),
       amount: editExpenseAmount,
       category: editExpenseCategory,
-      payerId: editExpensePayerId,
+      payerId: formattedEditPayers[0]?.userId || editExpensePayerId,
+      payerName: formattedEditPayers.length === 1 ? formattedEditPayers[0].userName : formattedEditPayers.map((p) => p.userName).join(', '),
+      payers: formattedEditPayers,
       date: editExpenseDate,
       splits: updatedSplits,
     });
@@ -443,10 +551,17 @@ export const GroupDetailsPage: React.FC = () => {
                           {exp.splitMethod} split
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
+                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
                         <span>
-                          Paid by <strong className="text-slate-800">{exp.payerName}</strong> on{' '}
-                          {formatDate(exp.date)}
+                          Paid by{' '}
+                          {exp.payers && exp.payers.length > 1 ? (
+                            <strong className="text-slate-800">
+                              {exp.payers.map((p) => `${p.userName} (${formatCurrency(p.amount, exp.currency)})`).join(' + ')}
+                            </strong>
+                          ) : (
+                            <strong className="text-slate-800">{exp.payerName}</strong>
+                          )}{' '}
+                          on {formatDate(exp.date)}
                         </span>
                         <span>·</span>
                         <span className="text-indigo-600 font-medium">
@@ -539,6 +654,34 @@ export const GroupDetailsPage: React.FC = () => {
                           </div>
                         </div>
                       )}
+
+                      {/* Who Paid Section */}
+                      <div>
+                        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Who Paid? (Payer Contributions)
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {(exp.payers && exp.payers.length > 0
+                            ? exp.payers
+                            : [{ userId: exp.payerId, userName: exp.payerName, amount: exp.amount }]
+                          ).map((p, pIdx) => (
+                            <div
+                              key={p.userId || pIdx}
+                              className="flex items-center justify-between p-2 bg-emerald-50/50 rounded-lg border border-emerald-200/60"
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                                <span className="font-medium text-slate-800 truncate">
+                                  {p.userName}
+                                </span>
+                              </div>
+                              <span className="font-mono font-bold text-emerald-700 tabular-nums">
+                                {formatCurrency(p.amount, exp.currency)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
 
                       <div>
                         <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
@@ -956,39 +1099,6 @@ export const GroupDetailsPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Category</label>
-                  <select
-                    value={editExpenseCategory}
-                    onChange={(e) => setEditExpenseCategory(e.target.value as any)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl capitalize"
-                  >
-                    <option value="food">Food & Drinks</option>
-                    <option value="transport">Transport</option>
-                    <option value="lodging">Accommodation</option>
-                    <option value="entertainment">Entertainment</option>
-                    <option value="utilities">Utilities</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Paid By</label>
-                  <select
-                    value={editExpensePayerId}
-                    onChange={(e) => setEditExpensePayerId(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  >
-                    {group.members.map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name} {m.userId === currentUser.id ? '(You)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
                   <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Date</label>
                   <input
                     type="date"
@@ -997,6 +1107,134 @@ export const GroupDetailsPage: React.FC = () => {
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Category</label>
+                <select
+                  value={editExpenseCategory}
+                  onChange={(e) => setEditExpenseCategory(e.target.value as any)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl capitalize"
+                >
+                  <option value="food">Food & Drinks</option>
+                  <option value="transport">Transport</option>
+                  <option value="lodging">Accommodation</option>
+                  <option value="entertainment">Entertainment</option>
+                  <option value="utilities">Utilities</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              {/* Who Paid Section */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+                    Who Paid? (Contributions) *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={distributeEditPayersEvenly}
+                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 hover:underline cursor-pointer"
+                  >
+                    Distribute Evenly
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {editExpensePayers.map((payer, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <select
+                        value={payer.userId}
+                        onChange={(e) => updateEditPayerUser(idx, e.target.value)}
+                        className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                      >
+                        {group.members.map((m) => (
+                          <option key={m.userId} value={m.userId}>
+                            {m.name} {m.userId === currentUser.id ? '(You)' : ''}
+                          </option>
+                        ))}
+                      </select>
+
+                      <div className="relative w-32">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-[10px]">
+                          {group.currency}
+                        </span>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0.00"
+                          value={payer.amount}
+                          onChange={(e) => updateEditPayerAmount(idx, e.target.value)}
+                          className="w-full pl-9 pr-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-right text-slate-900"
+                        />
+                      </div>
+
+                      {editExpensePayers.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeEditPayer(idx)}
+                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Remove payer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {editExpensePayers.length < group.members.length && (
+                  <button
+                    type="button"
+                    onClick={addEditPayer}
+                    className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Another Payer</span>
+                  </button>
+                )}
+
+                {/* Validation Status Banner */}
+                {(() => {
+                  const totalPaid = editExpensePayers.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+                  const diff = Math.round((editExpenseAmount - totalPaid) * 100) / 100;
+                  const isBalanced = Math.abs(diff) < 0.01 && editExpenseAmount > 0;
+
+                  return (
+                    <div
+                      className={`mt-3 p-2.5 rounded-xl text-[11px] flex items-center justify-between border ${
+                        isBalanced
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : diff > 0
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-rose-50 border-rose-200 text-rose-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-medium">
+                        {isBalanced ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            <span>Contributions match total expense</span>
+                          </>
+                        ) : diff > 0 ? (
+                          <>
+                            <AlertTriangle className="w-4 h-4 text-amber-600" />
+                            <span>Remaining: {formatCurrency(diff, group.currency)} to allocate</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="w-4 h-4 text-rose-600" />
+                            <span>Exceeded total by {formatCurrency(Math.abs(diff), group.currency)}</span>
+                          </>
+                        )}
+                      </div>
+                      <span className="font-mono font-bold">
+                        {formatCurrency(totalPaid, group.currency)} / {formatCurrency(editExpenseAmount, group.currency)}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">

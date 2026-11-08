@@ -312,8 +312,12 @@ export const DashboardPage: React.FC = () => {
             <div className="space-y-3">
               {expenses.slice(0, 5).map((exp) => {
                 const Icon = getCategoryIcon(exp.category);
-                const isUserPayer = exp.payerId === currentUser.id;
-                const userSplit = exp.splits.find((s) => s.userId === currentUser.id);
+                const userPayment = exp.payers && exp.payers.length > 0
+                  ? exp.payers.find((p) => p.userId === currentUser.id)
+                  : exp.payerId === currentUser.id
+                  ? { amount: exp.amount, userId: currentUser.id, userName: exp.payerName }
+                  : null;
+                const userSplit = exp.splits?.find((s) => s.userId === currentUser.id);
 
                 return (
                   <div
@@ -346,8 +350,10 @@ export const DashboardPage: React.FC = () => {
                         {formatCurrency(exp.amount, exp.currency)}
                       </div>
                       <div className="text-[10px] font-medium mt-0.5">
-                        {isUserPayer ? (
-                          <span className="text-emerald-600 font-semibold">You paid</span>
+                        {userPayment ? (
+                          <span className="text-emerald-600 font-semibold">
+                            You paid {exp.payers && exp.payers.length > 1 ? formatCurrency(userPayment.amount, exp.currency) : ''}
+                          </span>
                         ) : userSplit ? (
                           <span className="text-slate-500">
                             Your share: <span className="font-mono text-slate-700">{formatCurrency(userSplit.amount, exp.currency)}</span>

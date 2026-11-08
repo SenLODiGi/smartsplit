@@ -1105,6 +1105,7 @@ export const supabaseApi = {
         p_expense_date: expenseData.date || new Date().toISOString().slice(0, 10),
         p_notes: expenseData.notes || '',
         p_splits: expenseData.splits || [],
+        p_payers: expenseData.payers || [],
       });
 
       if (!rpcErr && rpcData) {
@@ -1121,7 +1122,19 @@ export const supabaseApi = {
         updated_at: new Date().toISOString(),
       };
 
-      if (expenseData.payerId) {
+      let primaryPayerId = expenseData.payerId || '';
+      let primaryPayerName = 'Member';
+
+      if (expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0) {
+        const firstP = expenseData.payers[0];
+        primaryPayerId = firstP.userId;
+        primaryPayerName =
+          expenseData.payers.length === 1
+            ? firstP.userName
+            : expenseData.payers.map((p: any) => p.userName.split(' ')[0]).join(' & ');
+        updates.payer_id = primaryPayerId;
+        updates.payer_name = primaryPayerName;
+      } else if (expenseData.payerId) {
         // Resolve profile or member
         const { data: prof } = await supabase
           .from('profiles')
@@ -1133,6 +1146,8 @@ export const supabaseApi = {
           const ep = extractProfile(prof);
           updates.payer_id = prof.id;
           updates.payer_name = ep?.name || 'Member';
+          primaryPayerId = prof.id;
+          primaryPayerName = updates.payer_name;
         } else {
           const { data: gm } = await supabase
             .from('group_members')
@@ -1144,6 +1159,8 @@ export const supabaseApi = {
             updates.payer_id = gm.user_id || null;
             updates.payer_member_id = gm.id;
             updates.payer_name = gm.invited_name || 'Member';
+            primaryPayerId = gm.user_id || gm.id;
+            primaryPayerName = updates.payer_name;
           }
         }
       }
@@ -1209,66 +1226,59 @@ export const supabaseApi = {
         }
       }
 
-      // Insert multiple payer records into expense_payments
-      const payersList =
-        expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0
-          ? expenseData.payers
-          : [
-              {
-                userId: payerIdToInsert,
-                userName: payerNameToInsert,
-                amount: Number(expenseData.amount) || 0,
-              },
-            ];
+      // Update multiple payer records in expense_payments
+      if (expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0) {
+        await supabase.from('expense_payments').delete().eq('expense_id', expenseId).catch(() => {});
 
-      const paymentsToInsert: any[] = [];
-      for (const p of payersList) {
-        let pUserId: string | null = null;
-        let pMemberId: string | null = null;
-        let pName: string = p.userName || 'Member';
+        const paymentsToInsert: any[] = [];
+        for (const p of expenseData.payers) {
+          let pUserId: string | null = null;
+          let pMemberId: string | null = null;
+          let pName: string = p.userName || 'Member';
 
-        if (p.userId) {
-          const { data: prof } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', p.userId)
-            .maybeSingle();
-
-          if (prof) {
-            const ep = extractProfile(prof);
-            pUserId = prof.id;
-            pName = ep?.name || pName;
-          } else {
-            const { data: gm } = await supabase
-              .from('group_members')
-              .select('id, user_id, invited_name')
+          if (p.userId) {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('*')
               .eq('id', p.userId)
               .maybeSingle();
 
-            if (gm) {
-              pUserId = gm.user_id || null;
-              pMemberId = gm.id;
-              pName = gm.invited_name || pName;
+            if (prof) {
+              const ep = extractProfile(prof);
+              pUserId = prof.id;
+              pName = ep?.name || pName;
+            } else {
+              const { data: gm } = await supabase
+                .from('group_members')
+                .select('id, user_id, invited_name')
+                .eq('id', p.userId)
+                .maybeSingle();
+
+              if (gm) {
+                pUserId = gm.user_id || null;
+                pMemberId = gm.id;
+                pName = gm.invited_name || pName;
+              }
             }
           }
+
+          paymentsToInsert.push({
+            expense_id: expenseId,
+            user_id: pUserId,
+            member_id: pMemberId,
+            payer_name: pName,
+            amount_paid: Number(p.amount) || 0,
+          });
         }
 
-        paymentsToInsert.push({
-          expense_id: expRow.id,
-          user_id: pUserId,
-          member_id: pMemberId,
-          payer_name: pName,
-          amount_paid: Number(p.amount) || 0,
-        });
-      }
-
-      if (paymentsToInsert.length > 0) {
-        await supabase
-          .from('expense_payments')
-          .insert(paymentsToInsert)
-          .catch((pErr) => {
-            console.warn('expense_payments insert notice:', pErr.message);
-          });
+        if (paymentsToInsert.length > 0) {
+          await supabase
+            .from('expense_payments')
+            .insert(paymentsToInsert)
+            .catch((pErr) => {
+              console.warn('expense_payments update notice:', pErr.message);
+            });
+        }
       }
 
       // Insert items and item assignments if present

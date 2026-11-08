@@ -18,9 +18,13 @@ interface AppContextType {
   currentUser: User;
   isAuthenticated: boolean;
   login: () => void;
-  logout: () => void;
-  signInWithEmail?: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signUpWithEmail?: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string; confirmationRequired?: boolean }>;
+  logout: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signUpWithEmail: (
+    email: string,
+    password: string,
+    name: string
+  ) => Promise<{ success: boolean; error?: string; confirmationRequired?: boolean }>;
   groups: Group[];
   currentGroupId: string;
   setCurrentGroupId: (id: string) => void;
@@ -33,8 +37,17 @@ interface AppContextType {
   setPreferredCurrency: (cur: string) => void;
   isLoading: boolean;
   refreshData: () => Promise<void>;
-  createGroup: (data: { name: string; description?: string; currency?: string; category?: any; memberNames?: string[] }) => Promise<Group | null>;
-  updateGroup: (groupId: string, data: { name?: string; description?: string; currency?: string; category?: any }) => Promise<Group | null>;
+  createGroup: (data: {
+    name: string;
+    description?: string;
+    currency?: string;
+    category?: any;
+    memberNames?: string[];
+  }) => Promise<Group | null>;
+  updateGroup: (
+    groupId: string,
+    data: { name?: string; description?: string; currency?: string; category?: any }
+  ) => Promise<Group | null>;
   deleteGroup: (groupId: string) => Promise<boolean>;
   addMemberToGroup: (groupId: string, name: string, email?: string) => Promise<boolean>;
   removeMemberFromGroup: (groupId: string, memberId: string) => Promise<{ success: boolean; error?: string }>;
@@ -50,7 +63,7 @@ interface AppContextType {
     step: 'upload' | 'processing' | 'raw_review' | 'corrected_review' | 'assignment' | 'summary';
     receiptData: OCRResult | null;
     rawImage: string | null;
-    assignments: Record<string, string[]>; // itemId -> userIds
+    assignments: Record<string, string[]>;
   };
   setActiveOCR: React.Dispatch<React.SetStateAction<any>>;
   processOCR: (imageBase64?: string, preset?: string) => Promise<OCRResult | null>;
@@ -97,7 +110,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info', duration: number = 4000) => {
       const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const newToast: ToastItem = { id, message, type, duration };
-      setToasts((prev) => [...prev.slice(-4), newToast]); // keep at most 5 toasts
+      setToasts((prev) => [...prev.slice(-4), newToast]);
 
       if (duration > 0) {
         setTimeout(() => {
@@ -124,58 +137,154 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const activeGroup = groups.find((g) => g.id === currentGroupId) || groups[0];
 
   // ============================================================================
-  // SUPABASE AUTH SESSION LISTENER
+  // HELPER: SYNC USER PROFILE FROM SUPABASE
+  // ============================================================================
+  const syncUserProfile = useCallback(async (sessionUser: any): Promise<User> => {
+    let name =
+      sessionUser.user_metadata?.name ||
+      sessionUser.user_metadata?.full_name ||
+      sessionUser.email?.split('@')[0] ||
+      'User';
+
+    let avatar =
+      sessionUser.user_metadata?.avatar ||
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80';
+
+    let initials = name
+      .split(' ')
+      .map((n: string) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+
+    try {
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('id, name, email, avatar, initials, preferred_currency')
+        .eq('id', sessionUser.id)
+        .single();
+
+      if (!error && profile) {
+        name = profile.name || name;
+        avatar = profile.avatar || avatar;
+        initials = profile.initials || initials;
+        if (profile.preferred_currency) {
+          setPreferredCurrency(profile.preferred_currency);
+        }
+      } else {
+        // Upsert fallback profile if trigger was delayed
+        await supabase
+          .from('profiles')
+          .upsert(
+            {
+              id: sessionUser.id,
+              name,
+              email: sessionUser.email,
+              avatar,
+              initials,
+            },
+            { onConflict: 'id' }
+          );
+      }
+    } catch (err) {
+      console.warn('Profile sync notice:', err);
+    }
+
+    const resolvedUser: User = {
+      id: sessionUser.id,
+      name,
+      email: sessionUser.email || '',
+      avatar,
+      initials,
+    };
+
+    return resolvedUser;
+  }, []);
+
+  // ============================================================================
+  // SUPABASE AUTH INITIALIZATION & SUBSCRIPTION
   // ============================================================================
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    let isMounted = true;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        const uName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User';
-        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
-        setCurrentUser({
-          id: session.user.id,
-          name: uName,
-          email: session.user.email || '',
-          avatar: session.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-          initials: uInitials,
-        });
-        setIsAuthenticated(true);
-        setIsDemoMode(false);
+    const initAuth = async () => {
+      try {
+        if (!isSupabaseConfigured) {
+          if (isMounted) setIsLoading(false);
+          return;
+        }
+
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (error) {
+          console.warn('Supabase getSession notice:', error.message);
+        }
+
+        if (session?.user && isMounted) {
+          const userObj = await syncUserProfile(session.user);
+          if (isMounted) {
+            setCurrentUser(userObj);
+            setIsAuthenticated(true);
+            setIsDemoMode(false);
+          }
+        } else if (isMounted) {
+          // If no active Supabase session on fresh load, start in demo mode with default user
+          setIsAuthenticated(true);
+          setIsDemoMode(true);
+          setCurrentUser(defaultUser);
+        }
+      } catch (err) {
+        console.warn('Auth initialization error:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
       }
-    }).catch(console.warn);
+    };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    initAuth();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+
       if (session?.user) {
-        const uName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User';
-        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
-        setCurrentUser({
-          id: session.user.id,
-          name: uName,
-          email: session.user.email || '',
-          avatar: session.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-          initials: uInitials,
-        });
-        setIsAuthenticated(true);
-        setIsDemoMode(false);
+        const userObj = await syncUserProfile(session.user);
+        if (isMounted) {
+          setCurrentUser(userObj);
+          setIsAuthenticated(true);
+          setIsDemoMode(false);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        if (isMounted) {
+          setIsAuthenticated(false);
+          setIsDemoMode(false);
+          setCurrentUser(defaultUser);
+        }
       }
     });
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [syncUserProfile]);
 
+  // ============================================================================
+  // DATA REFRESH
+  // ============================================================================
   const refreshData = async () => {
     try {
       setIsLoading(true);
 
-      // 1. Try Supabase first if configured and not strictly in demo mode
       let loadedGroups: Group[] = [];
       let loadedActivities: ActivityItem[] = [];
       let loadedNotifications: NotificationItem[] = [];
       let loadedSettlements: SettlementPayment[] = [];
 
+      // 1. If real user is authenticated in Supabase, load live user groups
       if (isSupabaseConfigured && !isDemoMode) {
         const [sbGroups, sbActs, sbNotifs, sbStls] = await Promise.all([
           supabaseApi.getGroups(),
@@ -192,7 +301,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
 
-      // 2. If Supabase returned empty or in demo mode, load seed API state
+      // 2. If Supabase is empty or app is in Demo Mode, load the rich seed dataset
       if (loadedGroups.length === 0) {
         const [groupsRes, historyRes, notifsRes, stlRes] = await Promise.all([
           fetch('/api/groups').then((r) => (r.ok ? r.json() : { groups: [] })),
@@ -218,7 +327,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setNotifications(loadedNotifications);
       setSettlements(loadedSettlements);
 
-      // Fetch expenses for current active group
+      // Fetch expenses for the current active group
       const targetGroupId = currentGroupId || (loadedGroups[0]?.id ?? 'grp_ella_weekend');
       if (targetGroupId) {
         if (isSupabaseConfigured && !isDemoMode) {
@@ -257,7 +366,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
           fetch(`/api/groups/${currentGroupId}/expenses`)
             .then((r) => (r.ok ? r.json() : { expenses: [] }))
-            .then((resp) => { if (resp.expenses) setExpenses(resp.expenses); })
+            .then((resp) => {
+              if (resp.expenses) setExpenses(resp.expenses);
+            })
             .catch(console.error);
         });
       } else {
@@ -271,115 +382,163 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [currentGroupId, isDemoMode]);
 
-  // Auth actions
+  // ============================================================================
+  // AUTHENTICATION ACTIONS
+  // ============================================================================
+
+  // Demo Login (One-click instant login for testing/evaluators)
   const login = () => {
     setIsAuthenticated(true);
     setIsDemoMode(true);
     setCurrentUser(defaultUser);
-    showToast(`Welcome back, ${defaultUser.name}! (Demo Mode)`, 'success');
+    showToast(`Welcome back, ${defaultUser.name}! (Instant Demo Mode)`, 'success');
   };
 
-  const logout = async () => {
+  // Sign Out
+  const logout = async (): Promise<void> => {
     try {
+      setIsLoading(true);
       if (isSupabaseConfigured) {
         await supabase.auth.signOut();
       }
-    } catch (e) {
-      console.warn('Sign out warning:', e);
+    } catch (err) {
+      console.warn('Sign out notice:', err);
+    } finally {
+      setIsAuthenticated(false);
+      setIsDemoMode(false);
+      setCurrentUser(defaultUser);
+      setIsLoading(false);
+      showToast('You have been logged out.', 'info');
     }
-    setIsAuthenticated(false);
-    setIsDemoMode(false);
-    setCurrentUser(defaultUser);
-    showToast('You have been logged out.', 'info');
   };
 
-  const signInWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  // Real Email/Password Sign In
+  const signInWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
     try {
       setIsLoading(true);
+
+      const cleanEmail = email.trim();
+      if (!cleanEmail || !password) {
+        showToast('Please enter both email and password.', 'warning');
+        return { success: false, error: 'Email and password are required.' };
+      }
+
       if (!isSupabaseConfigured) {
         login();
         return { success: true };
       }
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+
       if (error) {
-        showToast(error.message, 'error');
-        return { success: false, error: error.message };
+        const friendlyMessage = error.message.toLowerCase().includes('invalid login credentials')
+          ? 'Invalid email or password. Please verify and try again.'
+          : error.message;
+
+        showToast(friendlyMessage, 'error');
+        return { success: false, error: friendlyMessage };
       }
 
       if (data.user) {
-        const uName = data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'User';
-        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
-        setCurrentUser({
-          id: data.user.id,
-          name: uName,
-          email: data.user.email || '',
-          avatar: data.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-          initials: uInitials,
-        });
+        const resolvedUser = await syncUserProfile(data.user);
+        setCurrentUser(resolvedUser);
         setIsAuthenticated(true);
         setIsDemoMode(false);
-        showToast(`Welcome back, ${uName}!`, 'success');
+        showToast(`Welcome back, ${resolvedUser.name}!`, 'success');
         return { success: true };
       }
-      return { success: false, error: 'Sign in failed' };
-    } catch (err: any) {
-      showToast(err.message || 'Error signing in', 'error');
-      return { success: false, error: err.message };
+
+      return { success: false, error: 'Sign in failed.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(msg, 'error');
+      return { success: false, error: msg };
     } finally {
       setIsLoading(false);
     }
   };
 
-  const signUpWithEmail = async (email: string, password: string, name: string): Promise<{ success: boolean; error?: string }> => {
+  // Real Email/Password Registration
+  const signUpWithEmail = async (
+    email: string,
+    password: string,
+    name: string
+  ): Promise<{ success: boolean; error?: string; confirmationRequired?: boolean }> => {
     try {
       setIsLoading(true);
+
+      const cleanEmail = email.trim();
+      const cleanName = name.trim();
+
+      if (!cleanEmail || !password || !cleanName) {
+        showToast('Please fill in all registration fields.', 'warning');
+        return { success: false, error: 'All fields are required.' };
+      }
+
+      if (password.length < 6) {
+        showToast('Password must be at least 6 characters.', 'warning');
+        return { success: false, error: 'Password must be at least 6 characters.' };
+      }
+
       if (!isSupabaseConfigured) {
         login();
         return { success: true };
       }
 
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: cleanEmail,
         password,
         options: {
           data: {
-            name: name.trim(),
+            name: cleanName,
             avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
           },
         },
       });
 
       if (error) {
-        showToast(error.message, 'error');
-        return { success: false, error: error.message };
+        const friendlyMessage = error.message.toLowerCase().includes('already registered')
+          ? 'An account with this email already exists. Please sign in.'
+          : error.message;
+
+        showToast(friendlyMessage, 'error');
+        return { success: false, error: friendlyMessage };
       }
 
-      if (data.user) {
-        const uName = name.trim() || data.user.email?.split('@')[0] || 'User';
-        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
-        setCurrentUser({
-          id: data.user.id,
-          name: uName,
-          email: data.user.email || '',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-          initials: uInitials,
-        });
+      // Check if email confirmation is required by Supabase project settings
+      if (data.user && !data.session) {
+        showToast('Registration successful! Please check your email to confirm your account.', 'info', 6000);
+        return { success: true, confirmationRequired: true };
+      }
+
+      if (data.user && data.session) {
+        const resolvedUser = await syncUserProfile(data.user);
+        setCurrentUser(resolvedUser);
         setIsAuthenticated(true);
         setIsDemoMode(false);
-        showToast(`Account created! Welcome, ${uName}!`, 'success');
-        return { success: true };
+        showToast(`Account created! Welcome to SmartSplit, ${cleanName}!`, 'success');
+        return { success: true, confirmationRequired: false };
       }
-      return { success: false, error: 'Sign up failed' };
-    } catch (err: any) {
-      showToast(err.message || 'Error signing up', 'error');
-      return { success: false, error: err.message };
+
+      return { success: false, error: 'Registration failed.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(msg, 'error');
+      return { success: false, error: msg };
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Group operations
+  // ============================================================================
+  // GROUP OPERATIONS
+  // ============================================================================
   const createGroup = async (data: {
     name: string;
     description?: string;
@@ -507,7 +666,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return false;
   };
 
-  const removeMemberFromGroup = async (groupId: string, memberId: string): Promise<{ success: boolean; error?: string }> => {
+  const removeMemberFromGroup = async (
+    groupId: string,
+    memberId: string
+  ): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetch(`/api/groups/${groupId}/members/${memberId}`, { method: 'DELETE' });
       const json = await res.json().catch(() => ({}));
@@ -527,7 +689,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // Expense operations
+  // ============================================================================
+  // EXPENSE OPERATIONS
+  // ============================================================================
   const createExpense = async (expenseData: any): Promise<Expense | null> => {
     try {
       const payload = {
@@ -615,7 +779,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return false;
   };
 
-  // Settlements
+  // ============================================================================
+  // SETTLEMENTS & DEBT OPTIMIZATION
+  // ============================================================================
   const recordSettlement = async (paymentData: any): Promise<SettlementPayment | null> => {
     try {
       const payload = {
@@ -653,7 +819,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return null;
   };
 
-  // Debt minimization calculation (Client-side greedy bipartite engine)
   const getGroupOptimization = async (groupId: string): Promise<SettlementAnalysis | null> => {
     try {
       const targetGroup = groups.find((g) => g.id === groupId);
@@ -687,10 +852,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateCurrentUserProfile = async (data: { name?: string; email?: string }): Promise<boolean> => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {
-        const { error } = await supabase.from('profiles').update({
-          name: data.name,
-          email: data.email,
-        }).eq('id', currentUser.id);
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            name: data.name,
+            email: data.email,
+          })
+          .eq('id', currentUser.id);
 
         if (!error) {
           setCurrentUser((prev) => ({
@@ -726,7 +894,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return false;
   };
 
-  // OCR Pipeline
+  // ============================================================================
+  // OCR PIPELINE
+  // ============================================================================
   const processOCR = async (imageBase64?: string, preset?: string): Promise<OCRResult | null> => {
     try {
       setActiveOCR((prev) => ({ ...prev, step: 'processing' }));
@@ -846,6 +1016,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
+  // ============================================================================
+  // NOTIFICATIONS
+  // ============================================================================
   const markNotificationRead = async (id: string) => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {

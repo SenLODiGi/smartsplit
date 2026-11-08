@@ -44,6 +44,47 @@ export function extractProfile(p: any): { id: string; name: string; email: strin
 }
 
 /**
+ * Local persistent guest member store.
+ * Acts as a self-healing fallback when remote Supabase schema columns have not been migrated yet.
+ */
+export function getLocalGuestMembers(groupId: string): GroupMember[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const raw = localStorage.getItem(`smartsplit_guest_members_${groupId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalGuestMember(groupId: string, member: GroupMember): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const existing = getLocalGuestMembers(groupId);
+    if (
+      !existing.some(
+        (m) =>
+          m.id === member.id ||
+          m.name.toLowerCase() === member.name.toLowerCase() ||
+          (m.email && member.email && m.email.toLowerCase() === member.email.toLowerCase())
+      )
+    ) {
+      existing.push(member);
+      localStorage.setItem(`smartsplit_guest_members_${groupId}`, JSON.stringify(existing));
+    }
+  } catch {}
+}
+
+export function removeLocalGuestMember(groupId: string, memberId: string): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const existing = getLocalGuestMembers(groupId);
+    const filtered = existing.filter((m) => m.id !== memberId && m.userId !== memberId);
+    localStorage.setItem(`smartsplit_guest_members_${groupId}`, JSON.stringify(filtered));
+  } catch {}
+}
+
+/**
  * Maps PostgreSQL snake_case rows to frontend camelCase interfaces
  */
 

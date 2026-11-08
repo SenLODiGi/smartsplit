@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
-import { Group, Expense, SettlementAnalysis } from '../types';
+import { Group, GroupMember, Expense, SettlementAnalysis } from '../types';
 import { supabaseApi } from '../lib/supabaseService';
 import { supabaseStorage } from '../lib/supabaseStorage';
 import { isSupabaseConfigured } from '../lib/supabase';

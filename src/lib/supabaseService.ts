@@ -124,6 +124,44 @@ export function saveLocalSettlement(groupId: string, settlement: SettlementPayme
 }
 
 /**
+ * Local persistent expense store.
+ * Ensures seamless expense creation and immediate UI reflection
+ * even when remote schema varies or network is offline.
+ */
+export function getLocalExpenses(groupId: string): Expense[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const raw = localStorage.getItem(`smartsplit_local_expenses_${groupId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalExpense(groupId: string, expense: Expense): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const existing = getLocalExpenses(groupId);
+    const idx = existing.findIndex((e) => e.id === expense.id);
+    if (idx >= 0) {
+      existing[idx] = expense;
+    } else {
+      existing.unshift(expense);
+    }
+    localStorage.setItem(`smartsplit_local_expenses_${groupId}`, JSON.stringify(existing));
+  } catch {}
+}
+
+export function removeLocalExpense(groupId: string, expenseId: string): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const existing = getLocalExpenses(groupId);
+    const filtered = existing.filter((e) => e.id !== expenseId);
+    localStorage.setItem(`smartsplit_local_expenses_${groupId}`, JSON.stringify(filtered));
+  } catch {}
+}
+
+/**
  * Maps PostgreSQL snake_case rows to frontend camelCase interfaces
  */
 
@@ -206,7 +244,7 @@ export function mapExpenseFromDb(row: any): Expense {
     row.payer_member?.invited_name ||
     'Member';
 
-  let defaultPayerId = row.payer_id || row.payer_member_id || '';
+  let defaultPayerId = row.payer_id || row.paid_by || row.payer_member_id || '';
 
   // Extract multiple payer contributions from expense_payments
   const rawPayments = row.expense_payments || [];
@@ -243,7 +281,7 @@ export function mapExpenseFromDb(row: any): Expense {
   return {
     id: row.id,
     groupId: row.group_id,
-    title: row.title,
+    title: row.title || row.description || 'Expense',
     amount: Number(row.amount) || 0,
     currency: row.currency || 'LKR',
     category: row.category || 'food',
@@ -255,7 +293,7 @@ export function mapExpenseFromDb(row: any): Expense {
     splits,
     items,
     receiptUrl: row.receipt_url || '',
-    notes: row.notes || '',
+    notes: row.notes || row.description || '',
     createdAt: row.created_at || new Date().toISOString(),
   };
 }
@@ -990,8 +1028,12 @@ export const supabaseApi = {
 
   // Expenses
   async getExpenses(groupId: string): Promise<Expense[]> {
-    if (!isSupabaseConfigured) return [];
+    if (!isSupabaseConfigured) {
+      return getLocalExpenses(groupId);
+    }
     try {
+      let remoteExpenses: Expense[] = [];
+
       // 1. Primary query with expense_payments, profiles, members and items
       const { data, error } = await supabase
         .from('expenses')
@@ -1030,46 +1072,82 @@ export const supabaseApi = {
         .eq('group_id', groupId)
         .order('expense_date', { ascending: false });
 
-      if (!error && data) {
-        return data.map(mapExpenseFromDb);
+      if (!error && data && data.length > 0) {
+        remoteExpenses = data.map(mapExpenseFromDb);
+      } else {
+        // 2. Fallback query if expense_payments or member_id not yet migrated
+        const { data: fallbackData } = await supabase
+          .from('expenses')
+          .select(`
+            *,
+            profiles:payer_id (*),
+            expense_splits (
+              id,
+              user_id,
+              amount,
+              percentage,
+              shares,
+              profiles:user_id (*)
+            ),
+            expense_items (
+              id,
+              name,
+              quantity,
+              unit_price,
+              total_price,
+              confidence,
+              expense_item_assignments ( user_id )
+            )
+          `)
+          .eq('group_id', groupId)
+          .order('expense_date', { ascending: false });
+
+        if (fallbackData && fallbackData.length > 0) {
+          remoteExpenses = fallbackData.map(mapExpenseFromDb);
+        } else {
+          // 3. Ultra-safe basic query that works on any Supabase schema without foreign-key dependencies
+          const { data: basicData } = await supabase
+            .from('expenses')
+            .select('*')
+            .eq('group_id', groupId)
+            .order('expense_date', { ascending: false });
+
+          if (basicData && basicData.length > 0) {
+            const expIds = basicData.map((b: any) => b.id);
+            const splitsMap = new Map<string, any[]>();
+            try {
+              const { data: allSplits } = await supabase
+                .from('expense_splits')
+                .select('*')
+                .in('expense_id', expIds);
+              if (allSplits) {
+                for (const sp of allSplits) {
+                  const arr = splitsMap.get(sp.expense_id) || [];
+                  arr.push(sp);
+                  splitsMap.set(sp.expense_id, arr);
+                }
+              }
+            } catch {}
+
+            remoteExpenses = basicData.map((b: any) =>
+              mapExpenseFromDb({ ...b, expense_splits: splitsMap.get(b.id) || [] })
+            );
+          }
+        }
       }
 
-      // 2. Fallback query if expense_payments or member_id not yet migrated
-      const { data: fallbackData, error: fbError } = await supabase
-        .from('expenses')
-        .select(`
-          *,
-          profiles:payer_id (*),
-          expense_splits (
-            id,
-            user_id,
-            amount,
-            percentage,
-            shares,
-            profiles:user_id (*)
-          ),
-          expense_items (
-            id,
-            name,
-            quantity,
-            unit_price,
-            total_price,
-            confidence,
-            expense_item_assignments ( user_id )
-          )
-        `)
-        .eq('group_id', groupId)
-        .order('expense_date', { ascending: false });
-
-      if (fbError || !fallbackData) {
-        console.warn('getExpenses notice:', fbError?.message || error?.message);
-        return [];
+      // Merge with locally stored expenses for this group
+      const localExpenses = getLocalExpenses(groupId);
+      for (const le of localExpenses) {
+        if (!remoteExpenses.some((re) => re.id === le.id)) {
+          remoteExpenses.unshift(le);
+        }
       }
 
-      return fallbackData.map(mapExpenseFromDb);
+      return remoteExpenses;
     } catch (err) {
       console.error('getExpenses error:', err);
-      return [];
+      return getLocalExpenses(groupId);
     }
   },
 

@@ -7,9 +7,9 @@ export const AuthPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const initialMode = searchParams.get('mode') === 'signup' ? 'signup' : 'login';
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
-  const [email, setEmail] = useState('kasun.p@example.com');
-  const [password, setPassword] = useState('••••••••••••');
-  const [name, setName] = useState('Kasun Perera');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { login, signInWithEmail, signUpWithEmail } = useApp();
@@ -106,6 +106,7 @@ export const AuthPage: React.FC = () => {
                 <input
                   type="text"
                   required
+                  placeholder="e.g. Kasun Perera"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -120,6 +121,7 @@ export const AuthPage: React.FC = () => {
               <input
                 type="email"
                 required
+                placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -133,6 +135,7 @@ export const AuthPage: React.FC = () => {
               <input
                 type="password"
                 required
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"

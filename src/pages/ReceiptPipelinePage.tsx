@@ -189,13 +189,24 @@ export const ReceiptPipelinePage: React.FC = () => {
         };
       });
 
+    const payerMember = activeGroup.members.find((m) => m.userId === receiptPayerId || m.id === receiptPayerId);
+    const resolvedPayerId = receiptPayerId || currentUser.id;
+    const resolvedPayerName = payerMember?.name || currentUser.name || 'Group Admin';
+
     const newExpense = await createExpense({
       groupId: activeGroup.id,
       title: merchantName || 'Scanned Receipt',
       amount: grandTotal,
       currency: activeGroup.currency,
       category: 'food',
-      payerId: receiptPayerId || currentUser.id,
+      payerId: resolvedPayerId,
+      payers: [
+        {
+          userId: resolvedPayerId,
+          userName: resolvedPayerName,
+          amount: grandTotal,
+        },
+      ],
       date: receiptDate || new Date().toISOString().slice(0, 10),
       splitMethod: 'items',
       splits: finalSplits,

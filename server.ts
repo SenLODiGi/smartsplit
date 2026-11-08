@@ -945,12 +945,13 @@ app.post('/api/expenses', (req, res) => {
 
   let group = groups.find((g) => g.id === groupId);
   if (!group) {
-    group = {
+    const newG: Group = {
       id: groupId,
       name: 'Expense Group',
       description: 'Active Group',
       currency: currency || 'LKR',
       category: 'other',
+      coverGradient: 'from-blue-600 to-indigo-800',
       members: [
         {
           id: payerId || currentUser.id,
@@ -962,12 +963,10 @@ app.post('/api/expenses', (req, res) => {
           role: 'admin',
         },
       ],
-      totalSpend: 0,
-      expensesCount: 0,
-      userNetBalance: 0,
       createdAt: new Date().toISOString(),
     };
-    groups.push(group);
+    groups.push(newG);
+    group = newG;
   }
 
   const parsedAmount = Number(amount);
@@ -1133,12 +1132,13 @@ app.post('/api/settlements/payments', (req, res) => {
 
   let group = groups.find((g) => g.id === groupId);
   if (!group) {
-    group = {
+    const newG: Group = {
       id: groupId,
       name: 'Expense Group',
       description: 'Active Group',
       currency: currency || 'LKR',
       category: 'other',
+      coverGradient: 'from-blue-600 to-indigo-800',
       members: [
         {
           id: payerId || currentUser.id,
@@ -1150,12 +1150,10 @@ app.post('/api/settlements/payments', (req, res) => {
           role: 'admin',
         },
       ],
-      totalSpend: 0,
-      expensesCount: 0,
-      userNetBalance: 0,
       createdAt: new Date().toISOString(),
     };
-    groups.push(group);
+    groups.push(newG);
+    group = newG;
   }
 
   const parsedAmount = Number(amount);

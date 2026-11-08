@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { ArrowRightLeft, Sparkles, Check, ArrowRight } from 'lucide-react';
+import { ArrowRightLeft, Sparkles, Check, ArrowRight, AlertCircle, Mail } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const AuthPage: React.FC = () => {
@@ -11,8 +11,10 @@ export const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
+  const [isResending, setIsResending] = useState(false);
 
-  const { login, signInWithEmail, signUpWithEmail } = useApp();
+  const { login, signInWithEmail, signUpWithEmail, resendConfirmationEmail } = useApp();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -25,6 +27,7 @@ export const AuthPage: React.FC = () => {
           const res = await signUpWithEmail(email, password, name);
           if (res.success) {
             if (res.confirmationRequired) {
+              setUnconfirmedEmail(email);
               setMode('login');
               return;
             }
@@ -41,6 +44,9 @@ export const AuthPage: React.FC = () => {
           if (res.success) {
             navigate('/dashboard');
             return;
+          }
+          if (res.error && res.error.toLowerCase().includes('email not confirmed')) {
+            setUnconfirmedEmail(email);
           }
         } else {
           login();
@@ -96,6 +102,44 @@ export const AuthPage: React.FC = () => {
               <span className="px-2 bg-white text-slate-400 font-medium">Or continue with email</span>
             </div>
           </div>
+
+          {unconfirmedEmail && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-amber-900">Email Confirmation Required</p>
+                  <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
+                    A confirmation email was sent to <span className="font-mono font-semibold">{unconfirmedEmail}</span>. Check your inbox and spam folder, or click below to resend.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-amber-200/60">
+                <button
+                  type="button"
+                  disabled={isResending}
+                  onClick={async () => {
+                    if (resendConfirmationEmail && unconfirmedEmail) {
+                      setIsResending(true);
+                      await resendConfirmationEmail(unconfirmedEmail);
+                      setIsResending(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer disabled:opacity-50"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>{isResending ? 'Sending...' : 'Resend confirmation email'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnconfirmedEmail(null)}
+                  className="text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             {mode === 'signup' && (

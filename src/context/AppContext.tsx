@@ -25,6 +25,7 @@ interface AppContextType {
     password: string,
     name: string
   ) => Promise<{ success: boolean; error?: string; confirmationRequired?: boolean }>;
+  resendConfirmationEmail?: (email: string) => Promise<boolean>;
   groups: Group[];
   currentGroupId: string;
   setCurrentGroupId: (id: string) => void;
@@ -473,12 +474,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
 
       if (error) {
-        const friendlyMessage = error.message.toLowerCase().includes('invalid login credentials')
-          ? 'Invalid email or password. Please verify and try again.'
-          : error.message;
+        let friendlyMessage = error.message;
+        if (error.message.toLowerCase().includes('invalid login credentials')) {
+          friendlyMessage = 'Invalid email or password. Please verify and try again.';
+        } else if (error.message.toLowerCase().includes('email not confirmed')) {
+          friendlyMessage = 'Email not confirmed. Please check your inbox or confirm user in Supabase.';
+        }
 
-        showToast(friendlyMessage, 'error');
-        return { success: false, error: friendlyMessage };
+        showToast(friendlyMessage, 'error', 6000);
+        return { success: false, error: error.message };
       }
 
       if (data.user) {
@@ -575,6 +579,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, error: msg };
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Resend confirmation email
+  const resendConfirmationEmail = async (email: string): Promise<boolean> => {
+    try {
+      if (!isSupabaseConfigured) return true;
+      const cleanEmail = email.trim();
+      if (!cleanEmail) {
+        showToast('Please enter your email address.', 'warning');
+        return false;
+      }
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: cleanEmail,
+      });
+      if (error) {
+        showToast(error.message, 'error');
+        return false;
+      }
+      showToast('Confirmation email resent. Please check your inbox or spam folder.', 'success', 6000);
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(msg, 'error');
+      return false;
     }
   };
 
@@ -1110,6 +1140,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         logout,
         signInWithEmail,
         signUpWithEmail,
+        resendConfirmationEmail,
         groups,
         currentGroupId,
         setCurrentGroupId,

@@ -5,18 +5,11 @@ const supabaseKey = 'sb_publishable_O70bmKs6wSxT5ku-llaccg_9DmoN47S';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function testRPCs() {
-  const rpcs = [
-    'create_group_with_creator',
-    'is_group_member',
-    'is_group_admin',
-    'add_group_member_guest'
-  ];
-
-  for (const r of rpcs) {
-    const { data, error } = await supabase.rpc(r as any, {});
-    console.log(`RPC ${r}:`, error?.message || 'EXISTS');
-  }
+async function testParamRPC() {
+  const { data, error } = await supabase.rpc('create_group_with_creator', {
+    p_name: 'test'
+  });
+  console.log('Result with p_name:', { data, error });
 }
 
-testRPCs();
+testParamRPC();

@@ -119,11 +119,45 @@ export function mapExpenseFromDb(row: any): Expense {
   }));
 
   const pProfile = extractProfile(row.profiles || row.payer);
-  const payerName =
+  let defaultPayerName =
     pProfile?.name ||
     row.payer_name ||
     row.payer_member?.invited_name ||
     'Member';
+
+  let defaultPayerId = row.payer_id || row.payer_member_id || '';
+
+  // Extract multiple payer contributions from expense_payments
+  const rawPayments = row.expense_payments || [];
+  const mappedPayers: ExpensePayment[] = rawPayments.map((p: any) => {
+    const prof = extractProfile(p.profiles);
+    const name = prof?.name || p.payer_name || p.userName || 'Member';
+    return {
+      id: p.id,
+      userId: p.user_id || p.member_id || p.id,
+      userName: name,
+      amount: Number(p.amount_paid ?? p.amount) || 0,
+    };
+  });
+
+  const resolvedPayers: ExpensePayment[] =
+    mappedPayers.length > 0
+      ? mappedPayers
+      : [
+          {
+            userId: defaultPayerId,
+            userName: defaultPayerName,
+            amount: Number(row.amount) || 0,
+          },
+        ];
+
+  if (resolvedPayers.length > 1) {
+    defaultPayerName = resolvedPayers.map((p) => p.userName.split(' ')[0]).join(' & ');
+    defaultPayerId = resolvedPayers[0].userId;
+  } else if (resolvedPayers.length === 1) {
+    defaultPayerName = resolvedPayers[0].userName;
+    defaultPayerId = resolvedPayers[0].userId;
+  }
 
   return {
     id: row.id,
@@ -132,8 +166,9 @@ export function mapExpenseFromDb(row: any): Expense {
     amount: Number(row.amount) || 0,
     currency: row.currency || 'LKR',
     category: row.category || 'food',
-    payerId: row.payer_id || row.payer_member_id || '',
-    payerName,
+    payerId: defaultPayerId,
+    payerName: defaultPayerName,
+    payers: resolvedPayers,
     date: row.expense_date || new Date().toISOString().slice(0, 10),
     splitMethod: row.split_method || 'equal',
     splits,
@@ -630,12 +665,20 @@ export const supabaseApi = {
   async getExpenses(groupId: string): Promise<Expense[]> {
     if (!isSupabaseConfigured) return [];
     try {
-      // 1. Primary query with profiles, members and items
+      // 1. Primary query with expense_payments, profiles, members and items
       const { data, error } = await supabase
         .from('expenses')
         .select(`
           *,
           profiles:payer_id (*),
+          expense_payments (
+            id,
+            user_id,
+            member_id,
+            payer_name,
+            amount_paid,
+            profiles:user_id (*)
+          ),
           expense_splits (
             id,
             user_id,
@@ -664,7 +707,7 @@ export const supabaseApi = {
         return data.map(mapExpenseFromDb);
       }
 
-      // 2. Fallback query if member_id not yet migrated
+      // 2. Fallback query if expense_payments or member_id not yet migrated
       const { data: fallbackData, error: fbError } = await supabase
         .from('expenses')
         .select(`
@@ -711,6 +754,14 @@ export const supabaseApi = {
         .select(`
           *,
           profiles:payer_id ( id, name, avatar, initials ),
+          expense_payments (
+            id,
+            user_id,
+            member_id,
+            payer_name,
+            amount_paid,
+            profiles:user_id (*)
+          ),
           expense_splits (
             id,
             user_id,
@@ -735,8 +786,25 @@ export const supabaseApi = {
         .eq('id', expenseId)
         .maybeSingle();
 
-      if (error || !data) return null;
-      return mapExpenseFromDb(data);
+      if (!error && data) return mapExpenseFromDb(data);
+
+      // Fallback without expense_payments relation
+      const { data: fbData } = await supabase
+        .from('expenses')
+        .select(`
+          *,
+          profiles:payer_id ( id, name, avatar, initials ),
+          expense_splits (
+            id,
+            user_id,
+            amount,
+            profiles:user_id ( id, name )
+          )
+        `)
+        .eq('id', expenseId)
+        .maybeSingle();
+
+      return fbData ? mapExpenseFromDb(fbData) : null;
     } catch (err) {
       console.error('getExpenseById error:', err);
       return null;

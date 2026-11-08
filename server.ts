@@ -921,6 +921,7 @@ app.post('/api/expenses', (req, res) => {
     currency = 'LKR',
     category = 'food',
     payerId = currentUser.id,
+    payers,
     date = new Date().toISOString().slice(0, 10),
     splitMethod = 'equal',
     splits,
@@ -936,8 +937,26 @@ app.post('/api/expenses', (req, res) => {
     return res.status(400).json({ error: 'Valid expense amount is required' });
   }
 
-  const payerMember = group.members.find((m) => m.userId === payerId);
-  const payerName = payerMember ? payerMember.name : currentUser.name;
+  let finalPayers: ExpensePayment[] = [];
+  let primaryPayerId = payerId;
+  let payerName = 'Member';
+
+  if (payers && Array.isArray(payers) && payers.length > 0) {
+    finalPayers = payers.map((p: any) => ({
+      userId: p.userId,
+      userName: p.userName || group.members.find((m) => m.userId === p.userId)?.name || 'Member',
+      amount: Number(p.amount) || 0,
+    }));
+    primaryPayerId = finalPayers[0].userId;
+    payerName =
+      finalPayers.length === 1
+        ? finalPayers[0].userName
+        : finalPayers.map((p) => p.userName.split(' ')[0]).join(' & ');
+  } else {
+    const payerMember = group.members.find((m) => m.userId === payerId);
+    payerName = payerMember ? payerMember.name : currentUser.name;
+    finalPayers = [{ userId: primaryPayerId, userName: payerName, amount: parsedAmount }];
+  }
 
   let finalSplits: ExpenseSplit[] = [];
 
@@ -964,8 +983,9 @@ app.post('/api/expenses', (req, res) => {
     amount: parsedAmount,
     currency,
     category,
-    payerId,
+    payerId: primaryPayerId,
     payerName,
+    payers: finalPayers,
     date,
     splitMethod,
     splits: finalSplits,
@@ -1008,16 +1028,33 @@ app.delete('/api/expenses/:expenseId', (req, res) => {
 app.put('/api/expenses/:expenseId', (req, res) => {
   const expense = expenses.find((e) => e.id === req.params.expenseId);
   if (!expense) return res.status(404).json({ error: 'Expense not found' });
-  const { title, amount, category, payerId, date, splitMethod, splits, items, notes } = req.body;
+  const { title, amount, category, payerId, payers, date, splitMethod, splits, items, notes } = req.body;
   if (title) expense.title = title.trim();
   if (amount && Number(amount) > 0) expense.amount = Number(amount);
   if (category) expense.category = category;
-  if (payerId) {
+
+  if (payers && Array.isArray(payers) && payers.length > 0) {
+    const group = groups.find((g) => g.id === expense.groupId);
+    expense.payers = payers.map((p: any) => ({
+      userId: p.userId,
+      userName: p.userName || group?.members.find((m) => m.userId === p.userId)?.name || 'Member',
+      amount: Number(p.amount) || 0,
+    }));
+    expense.payerId = expense.payers[0].userId;
+    expense.payerName =
+      expense.payers.length === 1
+        ? expense.payers[0].userName
+        : expense.payers.map((p) => p.userName.split(' ')[0]).join(' & ');
+  } else if (payerId) {
     expense.payerId = payerId;
     const group = groups.find((g) => g.id === expense.groupId);
     const payerMember = group?.members.find((m) => m.userId === payerId);
-    if (payerMember) expense.payerName = payerMember.name;
+    if (payerMember) {
+      expense.payerName = payerMember.name;
+      expense.payers = [{ userId: payerId, userName: payerMember.name, amount: expense.amount }];
+    }
   }
+
   if (date) expense.date = date;
   if (splitMethod) expense.splitMethod = splitMethod;
   if (splits && Array.isArray(splits)) expense.splits = splits;

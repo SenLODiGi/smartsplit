@@ -944,6 +944,68 @@ export const supabaseApi = {
         }
       }
 
+      // Insert multiple payer records into expense_payments
+      const payersList =
+        expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0
+          ? expenseData.payers
+          : [
+              {
+                userId: payerIdToInsert,
+                userName: payerNameToInsert,
+                amount: Number(expenseData.amount) || 0,
+              },
+            ];
+
+      const paymentsToInsert: any[] = [];
+      for (const p of payersList) {
+        let pUserId: string | null = null;
+        let pMemberId: string | null = null;
+        let pName: string = p.userName || 'Member';
+
+        if (p.userId) {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', p.userId)
+            .maybeSingle();
+
+          if (prof) {
+            const ep = extractProfile(prof);
+            pUserId = prof.id;
+            pName = ep?.name || pName;
+          } else {
+            const { data: gm } = await supabase
+              .from('group_members')
+              .select('id, user_id, invited_name')
+              .eq('id', p.userId)
+              .maybeSingle();
+
+            if (gm) {
+              pUserId = gm.user_id || null;
+              pMemberId = gm.id;
+              pName = gm.invited_name || pName;
+            }
+          }
+        }
+
+        paymentsToInsert.push({
+          expense_id: expRow.id,
+          user_id: pUserId,
+          member_id: pMemberId,
+          payer_name: pName,
+          amount_paid: Number(p.amount) || 0,
+        });
+      }
+
+      if (paymentsToInsert.length > 0) {
+        await supabase
+          .from('expense_payments')
+          .insert(paymentsToInsert)
+          .catch((pErr) => {
+            console.warn('expense_payments insert notice:', pErr.message);
+          });
+      }
+
       // Insert items and item assignments if present
       if (expenseData.items && Array.isArray(expenseData.items) && expenseData.items.length > 0) {
         for (const item of expenseData.items) {
@@ -1145,6 +1207,68 @@ export const supabaseApi = {
         if (splitsToInsert.length > 0) {
           await supabase.from('expense_splits').insert(splitsToInsert);
         }
+      }
+
+      // Insert multiple payer records into expense_payments
+      const payersList =
+        expenseData.payers && Array.isArray(expenseData.payers) && expenseData.payers.length > 0
+          ? expenseData.payers
+          : [
+              {
+                userId: payerIdToInsert,
+                userName: payerNameToInsert,
+                amount: Number(expenseData.amount) || 0,
+              },
+            ];
+
+      const paymentsToInsert: any[] = [];
+      for (const p of payersList) {
+        let pUserId: string | null = null;
+        let pMemberId: string | null = null;
+        let pName: string = p.userName || 'Member';
+
+        if (p.userId) {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', p.userId)
+            .maybeSingle();
+
+          if (prof) {
+            const ep = extractProfile(prof);
+            pUserId = prof.id;
+            pName = ep?.name || pName;
+          } else {
+            const { data: gm } = await supabase
+              .from('group_members')
+              .select('id, user_id, invited_name')
+              .eq('id', p.userId)
+              .maybeSingle();
+
+            if (gm) {
+              pUserId = gm.user_id || null;
+              pMemberId = gm.id;
+              pName = gm.invited_name || pName;
+            }
+          }
+        }
+
+        paymentsToInsert.push({
+          expense_id: expRow.id,
+          user_id: pUserId,
+          member_id: pMemberId,
+          payer_name: pName,
+          amount_paid: Number(p.amount) || 0,
+        });
+      }
+
+      if (paymentsToInsert.length > 0) {
+        await supabase
+          .from('expense_payments')
+          .insert(paymentsToInsert)
+          .catch((pErr) => {
+            console.warn('expense_payments insert notice:', pErr.message);
+          });
       }
 
       // Insert items and item assignments if present

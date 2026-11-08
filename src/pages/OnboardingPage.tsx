@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -16,18 +16,26 @@ import {
 import { useApp } from '../context/AppContext';
 
 export const OnboardingPage: React.FC = () => {
-  const { currentUser, createGroup } = useApp();
+  const { currentUser, createGroup, updateCurrentUserProfile } = useApp();
   const navigate = useNavigate();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [displayName, setDisplayName] = useState(currentUser.name);
   const [selectedContexts, setSelectedContexts] = useState<string[]>(['travel', 'roommates']);
 
+  // Sync initial displayName if currentUser profile loads asynchronously
+  useEffect(() => {
+    if (currentUser.name && currentUser.name !== 'User' && (!displayName || displayName === 'User')) {
+      setDisplayName(currentUser.name);
+    }
+  }, [currentUser.name]);
+
   // Group creation state for step 3
   const [groupName, setGroupName] = useState('Ella Odyssey Weekend');
   const [groupCurrency, setGroupCurrency] = useState('LKR');
   const [groupMembers, setGroupMembers] = useState<string[]>(['Dilshan Silva', 'Anuki Fernando', 'Praveen Jayawardena']);
   const [newMember, setNewMember] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const contexts = [
     { id: 'travel', label: 'Group Trips & Travel', icon: Plane },
@@ -47,13 +55,34 @@ export const OnboardingPage: React.FC = () => {
   };
 
   const handleFinish = async () => {
-    await createGroup({
-      name: groupName || 'My First Group',
-      currency: groupCurrency,
-      category: 'trip',
-      memberNames: groupMembers,
-    });
-    navigate('/dashboard');
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      // Step 1: Update user name if changed in onboarding step 1
+      const cleanDisplayName = displayName.trim();
+      if (cleanDisplayName && cleanDisplayName !== currentUser.name) {
+        await updateCurrentUserProfile({ name: cleanDisplayName });
+      }
+
+      // Step 3: Create first group
+      const cleanGroupName = groupName.trim() || 'My First Group';
+      const created = await createGroup({
+        name: cleanGroupName,
+        currency: groupCurrency,
+        category: 'trip',
+        memberNames: groupMembers,
+      });
+
+      if (created) {
+        navigate('/dashboard');
+      } else {
+        console.warn('First group creation did not return group. User remains on onboarding to retry.');
+      }
+    } catch (err: any) {
+      console.error('Onboarding submission error:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -267,18 +296,29 @@ export const OnboardingPage: React.FC = () => {
               <div className="flex gap-2 pt-4">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setStep(2)}
-                  className="px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-colors"
+                  className="px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 transition-colors"
                 >
                   Back
                 </button>
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={handleFinish}
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>Launch SmartSplit</span>
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Launching SmartSplit...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Launch SmartSplit</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

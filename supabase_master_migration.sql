@@ -223,28 +223,102 @@ CREATE POLICY "Admins or creators can delete groups"
     ON public.groups FOR DELETE TO authenticated
     USING (created_by = auth.uid());
 
--- Group Members: Anyone in group can view; members/admins can insert and manage
+-- Group Members: Members and creators can view; creators can register initial admin; admins/creators can add members
 DROP POLICY IF EXISTS "Members can view members in their groups" ON public.group_members;
-CREATE POLICY "Members can view members in their groups"
+DROP POLICY IF EXISTS "Members and creators can view group members" ON public.group_members;
+CREATE POLICY "Members and creators can view group members"
     ON public.group_members FOR SELECT TO authenticated
-    USING (true);
+    USING (
+        auth.uid() IS NOT NULL
+        AND (
+            user_id = auth.uid()
+            OR EXISTS (
+                SELECT 1 FROM public.groups g
+                WHERE g.id = group_members.group_id
+                AND g.created_by = auth.uid()
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.group_members gm
+                WHERE gm.group_id = group_members.group_id
+                AND gm.user_id = auth.uid()
+            )
+        )
+    );
 
 DROP POLICY IF EXISTS "Members can add or invite group members" ON public.group_members;
 DROP POLICY IF EXISTS "Admins can add or invite group members" ON public.group_members;
-CREATE POLICY "Members can add or invite group members"
+DROP POLICY IF EXISTS "Creators and admins can add group members" ON public.group_members;
+CREATE POLICY "Creators and admins can add group members"
     ON public.group_members FOR INSERT TO authenticated
-    WITH CHECK (true);
+    WITH CHECK (
+        auth.uid() IS NOT NULL
+        AND (
+            (
+                user_id = auth.uid()
+                AND role = 'admin'
+                AND EXISTS (
+                    SELECT 1 FROM public.groups g
+                    WHERE g.id = group_members.group_id
+                    AND g.created_by = auth.uid()
+                )
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.groups g2
+                WHERE g2.id = group_members.group_id
+                AND g2.created_by = auth.uid()
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.group_members gm2
+                WHERE gm2.group_id = group_members.group_id
+                AND gm2.user_id = auth.uid()
+                AND gm2.role = 'admin'
+            )
+        )
+    );
 
 DROP POLICY IF EXISTS "Admins can update group members" ON public.group_members;
-CREATE POLICY "Admins can update group members"
+DROP POLICY IF EXISTS "Admins and creators can update group members" ON public.group_members;
+CREATE POLICY "Admins and creators can update group members"
     ON public.group_members FOR UPDATE TO authenticated
-    USING (true);
+    USING (
+        auth.uid() IS NOT NULL
+        AND (
+            EXISTS (
+                SELECT 1 FROM public.groups g
+                WHERE g.id = group_members.group_id
+                AND g.created_by = auth.uid()
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.group_members gm
+                WHERE gm.group_id = group_members.group_id
+                AND gm.user_id = auth.uid()
+                AND gm.role = 'admin'
+            )
+        )
+    );
 
 DROP POLICY IF EXISTS "Admins can remove members or members can leave" ON public.group_members;
 DROP POLICY IF EXISTS "Members can leave or admins can remove members" ON public.group_members;
-CREATE POLICY "Members can leave or admins can remove members"
+DROP POLICY IF EXISTS "Admins and creators can remove members" ON public.group_members;
+CREATE POLICY "Admins and creators can remove members"
     ON public.group_members FOR DELETE TO authenticated
-    USING (true);
+    USING (
+        auth.uid() IS NOT NULL
+        AND (
+            user_id = auth.uid()
+            OR EXISTS (
+                SELECT 1 FROM public.groups g
+                WHERE g.id = group_members.group_id
+                AND g.created_by = auth.uid()
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.group_members gm
+                WHERE gm.group_id = group_members.group_id
+                AND gm.user_id = auth.uid()
+                AND gm.role = 'admin'
+            )
+        )
+    );
 
 -- Expenses & Splits & Payments
 DROP POLICY IF EXISTS "Members can view group expenses" ON public.expenses;

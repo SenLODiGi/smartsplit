@@ -101,18 +101,20 @@ async function diagnose() {
 
   console.log('Insert WITH select Error:', gmWithSelErr);
 
-  console.log('--- 5. Testing Helper Functions ---');
-  const { data: isMemGid, error: errGid } = await supabase.rpc('is_group_member', { gid: grp.id });
-  console.log('is_group_member(gid):', isMemGid, 'Err:', errGid?.message);
+  console.log('--- 6. Probing Columns on groups & group_members ---');
+  // Probe groups columns
+  const { data: gSample } = await supabase.from('groups').select('*').limit(1);
+  if (gSample && gSample[0]) {
+    console.log('groups columns:', Object.keys(gSample[0]));
+  }
 
-  const { data: isMemG_id, error: errG_id } = await supabase.rpc('is_group_member', { g_id: grp.id });
-  console.log('is_group_member(g_id):', isMemG_id, 'Err:', errG_id?.message);
-
-  const { data: isAdmGid, error: errAdmGid } = await supabase.rpc('is_group_admin', { gid: grp.id });
-  console.log('is_group_admin(gid):', isAdmGid, 'Err:', errAdmGid?.message);
-
-  const { data: isAdmG_id, error: errAdmG_id } = await supabase.rpc('is_group_admin', { g_id: grp.id });
-  console.log('is_group_admin(g_id):', isAdmG_id, 'Err:', errAdmG_id?.message);
+  // Probe group_members columns
+  const { data: gmSample } = await supabase.from('group_members').select('*').limit(1);
+  if (gmSample && gmSample[0]) {
+    console.log('group_members columns:', Object.keys(gmSample[0]));
+  } else {
+    console.log('group_members is empty or cannot select without membership');
+  }
 }
 
 diagnose();

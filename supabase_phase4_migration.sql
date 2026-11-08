@@ -126,3 +126,4 @@ CREATE POLICY "Members can insert item assignments"
 DROP POLICY IF EXISTS "Members can delete item assignments" ON public.expense_item_assignments;
 CREATE POLICY "Members can delete item assignments"
     ON public.expense_item_assignments FOR DELETE TO authenticated USING (true);
+

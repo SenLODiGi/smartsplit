@@ -396,3 +396,4 @@ export function parseReceiptText(rawText: string, defaultCurrency: string = 'LKR
     rawText,
   };
 }
+

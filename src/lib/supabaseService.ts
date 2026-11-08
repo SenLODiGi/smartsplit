@@ -13,11 +13,62 @@ import {
 } from '../types';
 
 /**
+ * Helper to safely extract user profile attributes supporting both
+ * 'name' / 'full_name' and 'avatar' / 'avatar_url' column variants.
+ */
+export function extractProfile(p: any): { id: string; name: string; email: string; avatar: string; initials: string } | null {
+  if (!p) return null;
+  const name = p.name || p.full_name || p.username || 'Member';
+  const email = p.email || '';
+  const avatar =
+    p.avatar ||
+    p.avatar_url ||
+    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80';
+  const initials =
+    p.initials ||
+    name
+      .split(' ')
+      .map((n: string) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+
+  return {
+    id: p.id,
+    name,
+    email,
+    avatar,
+    initials,
+  };
+}
+
+/**
  * Maps PostgreSQL snake_case rows to frontend camelCase interfaces
  */
 
-export function mapGroupFromDb(row: any, members: GroupMember[] = []): Group {
+export function mapGroupFromDb(row: any, rawMembers: GroupMember[] = []): Group {
+  // Never allow demo user 'usr_kasun' or 'Kasun Perera' to leak into real user groups
+  const members = (row.created_by && row.created_by !== 'usr_kasun')
+    ? rawMembers.filter((m) => m.userId !== 'usr_kasun' && m.name !== 'Kasun Perera')
+    : rawMembers;
+
+  const creatorProfile = extractProfile(row.creator);
   const creatorMember = members.find((m) => m.userId === row.created_by);
+
+  // If creator is not in members list, ensure creator is present as admin
+  if (row.created_by && !members.some((m) => m.userId === row.created_by)) {
+    const creatorName = creatorProfile?.name || 'Group Admin';
+    members.unshift({
+      id: `gm_${row.created_by}`,
+      userId: row.created_by,
+      name: creatorName,
+      email: creatorProfile?.email || '',
+      avatar: creatorProfile?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+      initials: creatorProfile?.initials || creatorName.slice(0, 2).toUpperCase(),
+      role: 'admin',
+    });
+  }
+
   return {
     id: row.id,
     name: row.name,
@@ -31,15 +82,16 @@ export function mapGroupFromDb(row: any, members: GroupMember[] = []): Group {
     expensesCount: 0,
     userNetBalance: 0,
     createdBy: row.created_by,
-    creatorName: row.creator?.name || creatorMember?.name || 'Group Admin',
+    creatorName: creatorProfile?.name || creatorMember?.name || 'Group Admin',
   };
 }
 
 export function mapExpenseFromDb(row: any): Expense {
   const splits: ExpenseSplit[] = (row.expense_splits || []).map((s: any) => {
     const rawId = s.user_id || s.member_id || s.id;
+    const sProfile = extractProfile(s.profiles);
     const name =
-      s.profiles?.name ||
+      sProfile?.name ||
       s.group_members?.invited_name ||
       s.invited_name ||
       s.userName ||
@@ -66,9 +118,9 @@ export function mapExpenseFromDb(row: any): Expense {
     ),
   }));
 
+  const pProfile = extractProfile(row.profiles || row.payer);
   const payerName =
-    row.profiles?.name ||
-    row.payer?.name ||
+    pProfile?.name ||
     row.payer_name ||
     row.payer_member?.invited_name ||
     'Member';

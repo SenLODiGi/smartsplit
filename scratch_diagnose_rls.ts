@@ -61,12 +61,11 @@ async function diagnose() {
   }
 
   console.log('--- 3. Testing Group Insert ---');
-  const { data: grp, error: grpErr } = await supabase
+  let { data: grp, error: grpErr } = await supabase
     .from('groups')
     .insert({
       name: 'Test Onboarding Group',
       currency: 'LKR',
-      category: 'trip',
       created_by: user.id
     })
     .select()

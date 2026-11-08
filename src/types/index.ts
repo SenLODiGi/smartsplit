@@ -138,6 +138,19 @@ export interface SettlementAnalysis {
   savingsPercentage: number;
 }
 
+export interface ReceiptMetadata {
+  businessName?: string;
+  address?: string;
+  city?: string;
+  phone?: string;
+  dateTime?: string;
+  tableNo?: string;
+  receiptNo?: string;
+  taxNo?: string;
+  serverName?: string;
+  cashierName?: string;
+}
+
 export interface OCRResult {
   merchant: string;
   date: string;
@@ -149,4 +162,5 @@ export interface OCRResult {
   total: number;
   discrepancies: string[];
   rawText?: string;
+  metadata?: ReceiptMetadata;
 }

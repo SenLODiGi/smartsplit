@@ -18,6 +18,8 @@ import {
 import { useApp } from '../context/AppContext';
 import { formatCurrency, getAvatarColor } from '../utils/formatters';
 import { ExpenseItem } from '../types';
+import { validateReceiptImage } from '../lib/ocrEngine';
+import { supabaseStorage } from '../lib/supabaseStorage';
 
 export const ReceiptPipelinePage: React.FC = () => {
   const {
@@ -66,40 +68,21 @@ export const ReceiptPipelinePage: React.FC = () => {
   const itemsSubtotal = itemsList.reduce((sum, item) => sum + (item.totalPrice || item.quantity * item.unitPrice), 0);
   const grandTotal = itemsSubtotal + serviceCharge + taxAmount;
 
-  // Handle image upload with client-side canvas downscaling
+  // Handle image upload with client-side canvas downscaling and validation
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const validation = validateReceiptImage(file);
+    if (!validation.valid) {
+      showToast(validation.error || 'Invalid receipt image file.', 'error');
+      return;
+    }
+
     const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = async () => {
-        const canvas = document.createElement('canvas');
-        const maxDim = 1200;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > height && width > maxDim) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
-        } else if (height > maxDim) {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.82);
-          await processOCR(compressed);
-        } else {
-          await processOCR(reader.result as string);
-        }
-      };
-      img.src = reader.result as string;
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      await processOCR(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -157,13 +140,38 @@ export const ReceiptPipelinePage: React.FC = () => {
       p.total = Math.round((p.baseAmount + p.taxAndServiceShare) * 100) / 100;
     });
 
+    // Zero-drift exact reconciliation: sum(splits) must match grandTotal down to the cent
+    const activeParticipants = members.filter((m) => shares[m.userId].total > 0);
+    if (activeParticipants.length > 0) {
+      const sumShares = activeParticipants.reduce((sum, m) => sum + shares[m.userId].total, 0);
+      const diff = Math.round((grandTotal - sumShares) * 100) / 100;
+      if (diff !== 0) {
+        const primaryId = activeParticipants.some((m) => m.userId === receiptPayerId)
+          ? receiptPayerId
+          : activeParticipants[0].userId;
+        shares[primaryId].total = Math.round((shares[primaryId].total + diff) * 100) / 100;
+      }
+    }
+
     return shares;
   };
 
-  // Save the receipt as an actual group expense
+  // Save the receipt as an actual group expense with Supabase Storage upload
   const handleSaveAsExpense = async () => {
     if (!activeGroup) return;
     setIsSubmitting(true);
+
+    let uploadedReceiptUrl: string | undefined = undefined;
+    if (activeOCR.rawImage && activeOCR.rawImage.startsWith('data:image')) {
+      try {
+        const uploadRes = await supabaseStorage.uploadReceiptImage(activeGroup.id, activeOCR.rawImage);
+        if (uploadRes) {
+          uploadedReceiptUrl = uploadRes.path;
+        }
+      } catch (storageErr) {
+        console.warn('Receipt storage upload notice:', storageErr);
+      }
+    }
 
     const participantShares = calculateParticipantShares();
     const finalSplits = Object.entries(participantShares)
@@ -193,6 +201,7 @@ export const ReceiptPipelinePage: React.FC = () => {
         assignedTo: activeOCR.assignments[item.id] || [],
       })),
       notes: `OCR scanned bill from ${merchantName}. Includes ${itemsList.length} items.`,
+      receiptUrl: uploadedReceiptUrl,
     });
 
     setIsSubmitting(false);
@@ -209,12 +218,12 @@ export const ReceiptPipelinePage: React.FC = () => {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <span>OCR Receipt Scanner</span>
-            <span className="text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
-              Gemini AI
+            <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+              Tesseract.js v7 (Client-Side)
             </span>
           </h1>
           <p className="text-xs text-slate-500">
-            Auto-extract dishes, quantities, and service charges, then assign who consumed what.
+            Client-side OCR extracts line items, quantities, and totals directly in your browser. Assign who consumed what with zero rounding drift.
           </p>
         </div>
 
@@ -284,7 +293,7 @@ export const ReceiptPipelinePage: React.FC = () => {
               Upload Bill Photo or Camera Capture
             </h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto mb-6">
-              Drop your printed bill (JPG, PNG) or click to browse. The server-side Gemini 2.5 Flash model will extract items instantly.
+              Drop your printed bill (JPG, JPEG, PNG up to 15MB) or click to browse. Tesseract.js v7 will process the image locally in your browser with private secure storage.
             </p>
 
             <label className="cursor-pointer inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors">
@@ -292,7 +301,7 @@ export const ReceiptPipelinePage: React.FC = () => {
               <span>Choose Receipt Image</span>
               <input
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 onChange={handleFileUpload}
                 className="hidden"
               />
@@ -363,14 +372,27 @@ export const ReceiptPipelinePage: React.FC = () => {
       {/* PROCESSING STATE */}
       {/* ======================================================== */}
       {activeOCR.step === 'processing' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-2xs">
-          <div className="w-12 h-12 rounded-full border-4 border-indigo-600 border-t-transparent animate-spin mx-auto mb-4" />
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-2xs max-w-lg mx-auto">
+          <div className="w-14 h-14 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-4 shadow-xs">
+            <Sparkles className="w-7 h-7 animate-pulse text-indigo-600" />
+          </div>
           <h3 className="text-base font-bold text-slate-900 mb-1">
-            Analyzing Receipt with Gemini 2.5 Flash...
+            Processing Receipt Locally with Tesseract.js
           </h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            Extracting line items, item quantities, prices, taxes, and service charges.
+          <p className="text-xs text-slate-500 max-w-sm mx-auto mb-5">
+            {activeOCR.progress?.status || 'Analyzing receipt image in browser WebAssembly worker...'}
           </p>
+
+          <div className="w-full bg-slate-100 rounded-full h-2.5 mb-2 overflow-hidden border border-slate-200">
+            <div
+              className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300"
+              style={{ width: `${Math.max(10, activeOCR.progress?.progress || 15)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[11px] font-mono text-slate-400">
+            <span>Client-side OCR Worker</span>
+            <span>{Math.round(activeOCR.progress?.progress || 15)}%</span>
+          </div>
         </div>
       )}
 

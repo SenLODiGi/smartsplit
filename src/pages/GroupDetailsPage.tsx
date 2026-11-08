@@ -18,11 +18,14 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Image as ImageIcon,
+  ExternalLink,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
 import { Group, Expense, SettlementAnalysis } from '../types';
 import { supabaseApi } from '../lib/supabaseService';
+import { supabaseStorage } from '../lib/supabaseStorage';
 import { isSupabaseConfigured } from '../lib/supabase';
 
 export const GroupDetailsPage: React.FC = () => {
@@ -73,6 +76,24 @@ export const GroupDetailsPage: React.FC = () => {
   // Delete Expense confirm modal state
   const [expenseToDelete, setExpenseToDelete] = useState<string | null>(null);
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
+  const [viewingReceiptUrl, setViewingReceiptUrl] = useState<string | null>(null);
+  const [isLoadingReceipt, setIsLoadingReceipt] = useState<boolean>(false);
+
+  const handleOpenReceipt = async (receiptUrl: string) => {
+    setIsLoadingReceipt(true);
+    try {
+      const signedUrl = await supabaseStorage.getReceiptSignedUrl(receiptUrl);
+      if (signedUrl) {
+        setViewingReceiptUrl(signedUrl);
+      } else {
+        showToast('Receipt image could not be loaded.', 'error');
+      }
+    } catch {
+      showToast('Error loading receipt image.', 'error');
+    } finally {
+      setIsLoadingReceipt(false);
+    }
+  };
 
   useEffect(() => {
     if (groupId) {
@@ -473,31 +494,73 @@ export const GroupDetailsPage: React.FC = () => {
 
                   {/* Expandable Split Participants Breakdown */}
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-2 bg-slate-50/70 border-t border-slate-100 text-xs">
+                    <div className="px-4 pb-4 pt-2 bg-slate-50/70 border-t border-slate-100 text-xs space-y-3">
                       {exp.notes && (
-                        <p className="text-[11px] text-slate-600 italic mb-2.5">
+                        <p className="text-[11px] text-slate-600 italic">
                           "{exp.notes}"
                         </p>
                       )}
-                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                        Split Breakdown
-                      </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {(exp.splits || []).map((s, sIdx) => (
-                          <div
-                            key={s.userId || sIdx}
-                            className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200"
+
+                      {/* Receipt Photo Action */}
+                      {exp.receiptUrl && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReceipt(exp.receiptUrl!)}
+                            disabled={isLoadingReceipt}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors border border-indigo-200"
                           >
-                            <span className="font-medium text-slate-700 truncate">
-                              {s.userName || 'Member'}
-                              {s.percentage ? ` (${s.percentage}%)` : ''}
-                              {s.shares ? ` (${s.shares} shares)` : ''}
-                            </span>
-                            <span className="font-mono font-bold text-slate-900 tabular-nums">
-                              {formatCurrency(s.amount, exp.currency)}
-                            </span>
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>View Scanned Receipt</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Itemized Line Items (if split by items) */}
+                      {exp.items && exp.items.length > 0 && (
+                        <div>
+                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                            Itemized Dishes & Purchases ({exp.items.length} items)
+                          </h4>
+                          <div className="space-y-1 bg-white p-2.5 rounded-lg border border-slate-200 divide-y divide-slate-100">
+                            {exp.items.map((it) => (
+                              <div key={it.id} className="flex items-center justify-between text-[11px] pt-1 first:pt-0">
+                                <div>
+                                  <span className="font-semibold text-slate-800">{it.name}</span>
+                                  <span className="text-slate-400 font-mono ml-1.5">
+                                    ({it.quantity}x @ {formatCurrency(it.unitPrice, exp.currency)})
+                                  </span>
+                                </div>
+                                <span className="font-mono font-bold text-slate-900 tabular-nums">
+                                  {formatCurrency(it.totalPrice, exp.currency)}
+                                </span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        </div>
+                      )}
+
+                      <div>
+                        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          Split Breakdown
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {(exp.splits || []).map((s, sIdx) => (
+                            <div
+                              key={s.userId || sIdx}
+                              className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200"
+                            >
+                              <span className="font-medium text-slate-700 truncate">
+                                {s.userName || 'Member'}
+                                {s.percentage ? ` (${s.percentage}%)` : ''}
+                                {s.shares ? ` (${s.shares} shares)` : ''}
+                              </span>
+                              <span className="font-mono font-bold text-slate-900 tabular-nums">
+                                {formatCurrency(s.amount, exp.currency)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1009,6 +1072,46 @@ export const GroupDetailsPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: VIEW RECEIPT PHOTO */}
+      {/* ========================================================= */}
+      {viewingReceiptUrl && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-indigo-600" />
+                <span>Original Bill / Receipt</span>
+              </h3>
+              <div className="flex items-center gap-2">
+                <a
+                  href={viewingReceiptUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-semibold"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open Full</span>
+                </a>
+                <button
+                  onClick={() => setViewingReceiptUrl(null)}
+                  className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[70vh] overflow-auto rounded-xl bg-slate-50 flex items-center justify-center p-2">
+              <img
+                src={viewingReceiptUrl}
+                alt="Receipt"
+                className="max-h-[65vh] w-auto object-contain rounded-lg shadow-sm"
+              />
+            </div>
           </div>
         </div>
       )}

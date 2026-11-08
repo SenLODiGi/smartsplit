@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
+import { supabaseStorage } from './supabaseStorage';
 import {
   Group,
   GroupMember,
@@ -60,7 +61,9 @@ export function mapExpenseFromDb(row: any): Expense {
     unitPrice: Number(i.unit_price) || 0,
     totalPrice: Number(i.total_price) || 0,
     confidence: i.confidence ? Number(i.confidence) : 0.98,
-    assignedTo: (i.expense_item_assignments || []).map((a: any) => a.user_id),
+    assignedTo: (i.expense_item_assignments || []).map(
+      (a: any) => a.user_id || a.member_id || a.id
+    ),
   }));
 
   const payerName =
@@ -835,6 +838,69 @@ export const supabaseApi = {
         }
       }
 
+      // Insert items and item assignments if present
+      if (expenseData.items && Array.isArray(expenseData.items) && expenseData.items.length > 0) {
+        for (const item of expenseData.items) {
+          const { data: itemRow, error: itemErr } = await supabase
+            .from('expense_items')
+            .insert({
+              expense_id: expRow.id,
+              name: item.name.trim(),
+              quantity: Number(item.quantity) || 1,
+              unit_price: Number(item.unitPrice) || 0,
+              total_price:
+                Number(item.totalPrice) ||
+                (Number(item.quantity) || 1) * (Number(item.unitPrice) || 0),
+              confidence: item.confidence ? Number(item.confidence) : 0.98,
+            })
+            .select()
+            .single();
+
+          if (!itemErr && itemRow && Array.isArray(item.assignedTo)) {
+            const assignRows: any[] = [];
+            for (const uid of item.assignedTo) {
+              let aUserId: string | null = null;
+              let aMemberId: string | null = null;
+              let aInvitedName: string = 'Member';
+
+              const { data: prof } = await supabase
+                .from('profiles')
+                .select('id, name')
+                .eq('id', uid)
+                .maybeSingle();
+
+              if (prof) {
+                aUserId = prof.id;
+                aInvitedName = prof.name;
+              } else {
+                const { data: gm } = await supabase
+                  .from('group_members')
+                  .select('id, user_id, invited_name')
+                  .eq('id', uid)
+                  .maybeSingle();
+
+                if (gm) {
+                  aUserId = gm.user_id || null;
+                  aMemberId = gm.id;
+                  aInvitedName = gm.invited_name || aInvitedName;
+                }
+              }
+
+              assignRows.push({
+                item_id: itemRow.id,
+                user_id: aUserId,
+                member_id: aMemberId,
+                invited_name: aInvitedName,
+              });
+            }
+
+            if (assignRows.length > 0) {
+              await supabase.from('expense_item_assignments').insert(assignRows);
+            }
+          }
+        }
+      }
+
       // Log activity
       try {
         await supabase.from('activities').insert({
@@ -972,6 +1038,69 @@ export const supabaseApi = {
         }
       }
 
+      // Insert items and item assignments if present
+      if (expenseData.items && Array.isArray(expenseData.items) && expenseData.items.length > 0) {
+        for (const item of expenseData.items) {
+          const { data: itemRow, error: itemErr } = await supabase
+            .from('expense_items')
+            .insert({
+              expense_id: expenseId,
+              name: item.name.trim(),
+              quantity: Number(item.quantity) || 1,
+              unit_price: Number(item.unitPrice) || 0,
+              total_price:
+                Number(item.totalPrice) ||
+                (Number(item.quantity) || 1) * (Number(item.unitPrice) || 0),
+              confidence: item.confidence ? Number(item.confidence) : 0.98,
+            })
+            .select()
+            .single();
+
+          if (!itemErr && itemRow && Array.isArray(item.assignedTo)) {
+            const assignRows: any[] = [];
+            for (const uid of item.assignedTo) {
+              let aUserId: string | null = null;
+              let aMemberId: string | null = null;
+              let aInvitedName: string = 'Member';
+
+              const { data: prof } = await supabase
+                .from('profiles')
+                .select('id, name')
+                .eq('id', uid)
+                .maybeSingle();
+
+              if (prof) {
+                aUserId = prof.id;
+                aInvitedName = prof.name;
+              } else {
+                const { data: gm } = await supabase
+                  .from('group_members')
+                  .select('id, user_id, invited_name')
+                  .eq('id', uid)
+                  .maybeSingle();
+
+                if (gm) {
+                  aUserId = gm.user_id || null;
+                  aMemberId = gm.id;
+                  aInvitedName = gm.invited_name || aInvitedName;
+                }
+              }
+
+              assignRows.push({
+                item_id: itemRow.id,
+                user_id: aUserId,
+                member_id: aMemberId,
+                invited_name: aInvitedName,
+              });
+            }
+
+            if (assignRows.length > 0) {
+              await supabase.from('expense_item_assignments').insert(assignRows);
+            }
+          }
+        }
+      }
+
       // Log activity
       try {
         await supabase.from('activities').insert({
@@ -996,12 +1125,17 @@ export const supabaseApi = {
     try {
       const { data: exp } = await supabase
         .from('expenses')
-        .select('id, group_id, title')
+        .select('id, group_id, title, receipt_url')
         .eq('id', expenseId)
         .maybeSingle();
 
       const { error } = await supabase.from('expenses').delete().eq('id', expenseId);
       if (error) throw error;
+
+      // Delete receipt image from private storage if it exists
+      if (exp?.receipt_url) {
+        await supabaseStorage.deleteReceiptImage(exp.receipt_url);
+      }
 
       if (exp) {
         try {

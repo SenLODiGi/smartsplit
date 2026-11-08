@@ -509,12 +509,14 @@ export const supabaseApi = {
       }
 
       // 3. Log activity
-      await supabase.from('activities').insert({
-        group_id: groupId,
-        type: 'member_added',
-        actor_name: 'Admin',
-        description: `added ${cleanName || cleanEmail} to the group`,
-      }).catch(() => {});
+      try {
+        await supabase.from('activities').insert({
+          group_id: groupId,
+          type: 'member_added',
+          actor_name: 'Admin',
+          description: `added ${cleanName || cleanEmail} to the group`,
+        });
+      } catch {}
 
       return { success: true };
     } catch (err: any) {
@@ -539,12 +541,14 @@ export const supabaseApi = {
       if (error) throw error;
 
       // Log activity
-      await supabase.from('activities').insert({
-        group_id: groupId,
-        type: 'member_added',
-        actor_name: 'Admin',
-        description: 'removed a member from the group',
-      }).catch(() => {});
+      try {
+        await supabase.from('activities').insert({
+          group_id: groupId,
+          type: 'member_added',
+          actor_name: 'Admin',
+          description: 'removed a member from the group',
+        });
+      } catch {}
 
       return { success: true };
     } catch (err: any) {

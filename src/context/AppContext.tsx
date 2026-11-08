@@ -20,7 +20,7 @@ interface AppContextType {
   login: () => void;
   logout: () => void;
   signInWithEmail?: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signUpWithEmail?: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  signUpWithEmail?: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string; confirmationRequired?: boolean }>;
   groups: Group[];
   currentGroupId: string;
   setCurrentGroupId: (id: string) => void;

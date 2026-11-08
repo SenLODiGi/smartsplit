@@ -78,8 +78,19 @@ async function diagnose() {
     return;
   }
 
-  console.log('--- 4. Testing Group Members Insert (The Failing Step!) ---');
-  const { data: gm, error: gmErr } = await supabase
+  console.log('--- 4. Testing Group Members Insert (WITHOUT SELECT) ---');
+  const { data: gmNoSel, error: gmNoSelErr } = await supabase
+    .from('group_members')
+    .insert({
+      group_id: grp.id,
+      user_id: user.id,
+      role: 'admin'
+    });
+
+  console.log('Insert WITHOUT select Error:', gmNoSelErr);
+
+  console.log('--- 4b. Testing Group Members Insert (WITH SELECT) ---');
+  const { data: gmWithSel, error: gmWithSelErr } = await supabase
     .from('group_members')
     .insert({
       group_id: grp.id,
@@ -88,7 +99,7 @@ async function diagnose() {
     })
     .select();
 
-  console.log('Group member insert result:', gm, 'Error:', gmErr);
+  console.log('Insert WITH select Error:', gmWithSelErr);
 
   console.log('--- 5. Testing RPC create_group_with_creator ---');
   const { data: rpcRes, error: rpcErr } = await supabase.rpc('create_group_with_creator', {

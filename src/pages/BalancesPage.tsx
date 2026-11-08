@@ -14,6 +14,8 @@ import {
   Check,
   History,
   ShieldCheck,
+  PlusCircle,
+  AlertCircle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
@@ -34,19 +36,16 @@ export const BalancesPage: React.FC = () => {
   const location = useLocation();
 
   const [analysis, setAnalysis] = useState<SettlementAnalysis | null>(null);
-  const [selectedTransfer, setSelectedTransfer] = useState<OptimizedTransfer | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedPayerId, setSelectedPayerId] = useState('');
+  const [selectedPayeeId, setSelectedPayeeId] = useState('');
+  const [settlementAmount, setSettlementAmount] = useState('');
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'frimi_genie' | 'koko_qr' | 'cash'>('bank_transfer');
   const [refNote, setRefNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState(false);
-
-  // Check if transfer was passed via router navigation state
-  useEffect(() => {
-    const stateTransfer = (location.state as any)?.transfer;
-    if (stateTransfer) {
-      setSelectedTransfer(stateTransfer);
-    }
-  }, [location.state]);
+  const [validationError, setValidationError] = useState('');
 
   const fetchBalances = () => {
     if (activeGroup) {
@@ -58,33 +57,114 @@ export const BalancesPage: React.FC = () => {
 
   useEffect(() => {
     fetchBalances();
-  }, [activeGroup, expenses]);
+  }, [activeGroup, expenses, settlements]);
 
-  const handleConfirmSettlement = async () => {
-    if (!selectedTransfer || !activeGroup) return;
+  const openTransferSettlement = (tx: OptimizedTransfer) => {
+    setSelectedPayerId(tx.fromId);
+    setSelectedPayeeId(tx.toId);
+    setSettlementAmount(tx.amount.toString());
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentMethod('bank_transfer');
+    setRefNote('');
+    setValidationError('');
+    setSuccessMessage(false);
+    setShowModal(true);
+  };
+
+  const openCustomSettlement = () => {
+    if (!activeGroup || !activeGroup.members || activeGroup.members.length === 0) {
+      showToast('No group members found.', 'warning');
+      return;
+    }
+    const members = activeGroup.members;
+    const debtor = analysis?.netBalances.find((nb) => nb.balance < -0.01);
+    const creditor = analysis?.netBalances.find((nb) => nb.balance > 0.01);
+
+    const defaultPayer = debtor ? debtor.userId : members[0]?.userId || members[0]?.id || '';
+    const otherMembers = members.filter((m) => (m.userId || m.id) !== defaultPayer);
+    const defaultPayee = creditor ? creditor.userId : (otherMembers[0]?.userId || otherMembers[0]?.id || '');
+
+    setSelectedPayerId(defaultPayer);
+    setSelectedPayeeId(defaultPayee);
+    setSettlementAmount(debtor ? debtor.owes.toString() : '');
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentMethod('bank_transfer');
+    setRefNote('');
+    setValidationError('');
+    setSuccessMessage(false);
+    setShowModal(true);
+  };
+
+  // Check if transfer was passed via router navigation state
+  useEffect(() => {
+    const stateTransfer = (location.state as any)?.transfer;
+    if (stateTransfer) {
+      openTransferSettlement(stateTransfer);
+    }
+  }, [location.state]);
+
+  const handleConfirmSettlement = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setValidationError('');
+
+    if (!activeGroup) {
+      setValidationError('Please select an active group.');
+      return;
+    }
+
+    if (!selectedPayerId || !selectedPayeeId) {
+      setValidationError('Please select both a sender and a receiver.');
+      return;
+    }
+
+    if (selectedPayerId === selectedPayeeId) {
+      setValidationError('Sender and receiver cannot be the same member.');
+      return;
+    }
+
+    const numAmount = parseFloat(settlementAmount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      setValidationError('Please enter a valid payment amount greater than zero.');
+      return;
+    }
+
+    if (numAmount > 100000000) {
+      setValidationError('Payment amount is too large.');
+      return;
+    }
+
+    const payerMember = activeGroup.members.find((m) => (m.userId || m.id) === selectedPayerId);
+    const payeeMember = activeGroup.members.find((m) => (m.userId || m.id) === selectedPayeeId);
+
     setIsSubmitting(true);
+    try {
+      const payment = await recordSettlement({
+        groupId: activeGroup.id,
+        payerId: selectedPayerId,
+        payerName: payerMember?.name || 'Member',
+        payeeId: selectedPayeeId,
+        payeeName: payeeMember?.name || 'Member',
+        amount: numAmount,
+        currency: activeGroup.currency,
+        paymentMethod,
+        referenceNote: refNote || `Settlement for ${activeGroup.name}`,
+        date: paymentDate,
+      });
 
-    const payment = await recordSettlement({
-      groupId: activeGroup.id,
-      payerId: selectedTransfer.fromId,
-      payerName: selectedTransfer.fromName,
-      payeeId: selectedTransfer.toId,
-      payeeName: selectedTransfer.toName,
-      amount: selectedTransfer.amount,
-      currency: activeGroup.currency,
-      paymentMethod,
-      referenceNote: refNote || `Settlement for ${activeGroup.name}`,
-    });
-
-    setIsSubmitting(false);
-    if (payment) {
-      setSuccessMessage(true);
-      fetchBalances();
-      setTimeout(() => {
-        setSelectedTransfer(null);
-        setSuccessMessage(false);
-        setRefNote('');
-      }, 1800);
+      if (payment) {
+        setSuccessMessage(true);
+        fetchBalances();
+        setTimeout(() => {
+          setShowModal(false);
+          setSuccessMessage(false);
+          setSettlementAmount('');
+          setRefNote('');
+        }, 1500);
+      }
+    } catch (err: any) {
+      setValidationError(err.message || 'Failed to record settlement.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -108,16 +188,26 @@ export const BalancesPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-          <span>Balances & Debt Minimization</span>
-          <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-            Algorithm Active
-          </span>
-        </h1>
-        <p className="text-xs text-slate-500">
-          Smart graph minimization reduces circular transactions into the fewest possible direct payments.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <span>Balances & Debt Minimization</span>
+            <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+              Algorithm Active
+            </span>
+          </h1>
+          <p className="text-xs text-slate-500">
+            Smart graph minimization reduces circular transactions into the fewest possible direct payments.
+          </p>
+        </div>
+
+        <button
+          onClick={openCustomSettlement}
+          className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors self-start sm:self-auto cursor-pointer"
+        >
+          <PlusCircle className="w-4 h-4" />
+          <span>Record Payment</span>
+        </button>
       </div>
 
       {/* Comparison Efficiency Banner */}
@@ -174,6 +264,12 @@ export const BalancesPage: React.FC = () => {
               Execute these transfers to square all debts in {activeGroup?.name}.
             </p>
           </div>
+          <button
+            onClick={openCustomSettlement}
+            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer"
+          >
+            <span>+ Custom Payment</span>
+          </button>
         </div>
 
         {!analysis || analysis.optimizedTransfers.length === 0 ? (
@@ -213,11 +309,8 @@ export const BalancesPage: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={() => {
-                      setSelectedTransfer(tx);
-                      setSuccessMessage(false);
-                    }}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors whitespace-nowrap"
+                    onClick={() => openTransferSettlement(tx)}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors whitespace-nowrap cursor-pointer"
                   >
                     Settle Up
                   </button>
@@ -230,9 +323,12 @@ export const BalancesPage: React.FC = () => {
 
       {/* Net Balances Roster */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
-        <h2 className="text-base font-bold text-slate-900 mb-4">
+        <h2 className="text-base font-bold text-slate-900 mb-1">
           Individual Net Positions
         </h2>
+        <p className="text-xs text-slate-500 mb-4">
+          Calculated using formula: Net Balance = Total Paid − Total Owed
+        </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {analysis?.netBalances.map((nb) => {
@@ -242,26 +338,60 @@ export const BalancesPage: React.FC = () => {
             return (
               <div
                 key={nb.userId}
-                className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-xs"
+                className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-xs flex flex-col justify-between"
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(nb.userName)}`}>
-                    {nb.userName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(nb.userName)}`}>
+                      {nb.userName.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                    </div>
+                    <div className="font-bold text-slate-900 truncate">
+                      {nb.userName} {nb.userId === currentUser.id ? '(You)' : ''}
+                    </div>
                   </div>
-                  <div className="font-bold text-slate-900 truncate">
-                    {nb.userName} {nb.userId === currentUser.id ? '(You)' : ''}
+
+                  <div className="space-y-1 pt-2 border-t border-slate-200 text-[11px]">
+                    <div className="flex justify-between items-center text-slate-500">
+                      <span>Total Paid:</span>
+                      <span className="font-mono font-medium text-slate-800 tabular-nums">
+                        {formatCurrency(nb.totalPaid, activeGroup?.currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-500">
+                      <span>Total Owed:</span>
+                      <span className="font-mono font-medium text-slate-800 tabular-nums">
+                        {formatCurrency(nb.totalOwed, activeGroup?.currency)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-mono font-bold tabular-nums">
-                  <span className="text-slate-500 font-sans font-medium text-[11px]">Net:</span>
-                  {isOwed ? (
-                    <span className="text-emerald-600">+{formatCurrency(nb.balance, activeGroup?.currency)}</span>
-                  ) : owes ? (
-                    <span className="text-rose-600">-{formatCurrency(Math.abs(nb.balance), activeGroup?.currency)}</span>
-                  ) : (
-                    <span className="text-slate-400">Rs. 0.00</span>
-                  )}
+                <div className="pt-2 mt-2 border-t border-slate-200/80">
+                  <div className="flex justify-between items-center font-mono font-bold tabular-nums">
+                    <span className="text-slate-600 font-sans font-medium text-[11px]">Net Balance:</span>
+                    {isOwed ? (
+                      <span className="text-emerald-600">+{formatCurrency(nb.balance, activeGroup?.currency)}</span>
+                    ) : owes ? (
+                      <span className="text-rose-600">-{formatCurrency(Math.abs(nb.balance), activeGroup?.currency)}</span>
+                    ) : (
+                      <span className="text-slate-400">Rs. 0.00</span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-right mt-1 font-semibold">
+                    {isOwed ? (
+                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                        Gets back {formatCurrency(nb.getsBack, activeGroup?.currency)}
+                      </span>
+                    ) : owes ? (
+                      <span className="text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded">
+                        Owes {formatCurrency(nb.owes, activeGroup?.currency)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 bg-slate-200/60 px-1.5 py-0.5 rounded">
+                        Settled up
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -327,8 +457,8 @@ export const BalancesPage: React.FC = () => {
         )}
       </div>
 
-      {/* Settle Up Action Modal */}
-      {selectedTransfer && (
+      {/* Settle Up / Record Payment Modal */}
+      {showModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
             {successMessage ? (
@@ -338,7 +468,7 @@ export const BalancesPage: React.FC = () => {
                 </div>
                 <h3 className="text-base font-bold text-slate-900">Settlement Recorded!</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  The payment of {formatCurrency(selectedTransfer.amount, selectedTransfer.currency)} was verified and balances updated.
+                  The payment of {formatCurrency(parseFloat(settlementAmount) || 0, activeGroup?.currency)} was recorded and group balances updated.
                 </p>
               </div>
             ) : (
@@ -346,35 +476,95 @@ export const BalancesPage: React.FC = () => {
                 <h3 className="text-base font-bold text-slate-900 mb-1">
                   Record Settlement Payment
                 </h3>
-                <p className="text-xs text-slate-500 mb-5">
-                  Confirm the transfer details between group members.
+                <p className="text-xs text-slate-500 mb-4">
+                  Select payer, recipient and amount to square debts in {activeGroup?.name}.
                 </p>
 
-                <div className="space-y-4">
-                  {/* Payer and Payee visual */}
-                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Payer:</span>
-                      <span className="font-bold text-slate-900">{selectedTransfer.fromName}</span>
+                {validationError && (
+                  <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700">
+                    <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
+                    <span>{validationError}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleConfirmSettlement} className="space-y-4 text-xs">
+                  {/* Sender & Receiver Selection */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Who is paying? (Sender) *</label>
+                      <select
+                        value={selectedPayerId}
+                        onChange={(e) => setSelectedPayerId(e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {activeGroup?.members.map((m) => {
+                          const uid = m.userId || m.id;
+                          return (
+                            <option key={uid} value={uid}>
+                              {m.name} {uid === currentUser.id ? '(You)' : ''}
+                            </option>
+                          );
+                        })}
+                      </select>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Payee:</span>
-                      <span className="font-bold text-slate-900">{selectedTransfer.toName}</span>
+
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Who receives? (Recipient) *</label>
+                      <select
+                        value={selectedPayeeId}
+                        onChange={(e) => setSelectedPayeeId(e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {activeGroup?.members
+                          .filter((m) => (m.userId || m.id) !== selectedPayerId)
+                          .map((m) => {
+                            const uid = m.userId || m.id;
+                            return (
+                              <option key={uid} value={uid}>
+                                {m.name} {uid === currentUser.id ? '(You)' : ''}
+                              </option>
+                            );
+                          })}
+                      </select>
                     </div>
-                    <div className="flex justify-between pt-2 border-t border-slate-200 font-bold">
-                      <span className="text-slate-700">Amount Due:</span>
-                      <span className="font-mono text-emerald-600 text-sm">
-                        {formatCurrency(selectedTransfer.amount, selectedTransfer.currency)}
-                      </span>
+                  </div>
+
+                  {/* Payment Amount & Date */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">
+                        Amount ({activeGroup?.currency || 'LKR'}) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        placeholder="0.00"
+                        value={settlementAmount}
+                        onChange={(e) => setSettlementAmount(e.target.value)}
+                        className="w-full font-mono text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Date *</label>
+                      <input
+                        type="date"
+                        value={paymentDate}
+                        onChange={(e) => setPaymentDate(e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
                     </div>
                   </div>
 
                   {/* Payment Channel options */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    <label className="block font-semibold text-slate-700 uppercase tracking-wider text-[11px] mb-2">
                       Payment Channel
                     </label>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2">
                       {[
                         { id: 'bank_transfer', label: 'Bank Transfer', icon: Building2 },
                         { id: 'frimi_genie', label: 'FriMi / Genie', icon: CreditCard },
@@ -387,7 +577,7 @@ export const BalancesPage: React.FC = () => {
                             key={item.id}
                             type="button"
                             onClick={() => setPaymentMethod(item.id as any)}
-                            className={`flex items-center gap-2 p-2.5 rounded-xl border font-medium transition-all ${
+                            className={`flex items-center gap-2 p-2.5 rounded-xl border font-medium transition-all cursor-pointer ${
                               paymentMethod === item.id
                                 ? 'border-indigo-600 bg-indigo-50 text-indigo-900 font-semibold shadow-xs'
                                 : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
@@ -403,15 +593,15 @@ export const BalancesPage: React.FC = () => {
 
                   {/* Reference Note */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Transaction Note / Reference
+                    <label className="block font-semibold text-slate-700 uppercase tracking-wider text-[11px] mb-1">
+                      Transaction Note / Reference (Optional)
                     </label>
                     <input
                       type="text"
                       value={refNote}
                       onChange={(e) => setRefNote(e.target.value)}
-                      placeholder="e.g. ComBank ref #88291, Cash given at villa"
-                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="e.g. ComBank ref #88291, Cash given at dinner"
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
 
@@ -419,21 +609,20 @@ export const BalancesPage: React.FC = () => {
                   <div className="flex gap-2 pt-3">
                     <button
                       type="button"
-                      onClick={() => setSelectedTransfer(null)}
-                      className="flex-1 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors"
+                      onClick={() => setShowModal(false)}
+                      className="flex-1 py-2.5 font-semibold text-slate-700 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
-                      type="button"
+                      type="submit"
                       disabled={isSubmitting}
-                      onClick={handleConfirmSettlement}
-                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
                     >
                       {isSubmitting ? 'Recording...' : 'Confirm Payment'}
                     </button>
                   </div>
-                </div>
+                </form>
               </div>
             )}
           </div>

@@ -75,6 +75,8 @@ export interface Group {
   coverGradient: string;
   members: GroupMember[];
   createdAt: string;
+  createdBy?: string;
+  creatorName?: string;
 }
 
 export interface ExpenseSplit {

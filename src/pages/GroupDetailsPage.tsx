@@ -47,6 +47,7 @@ export const GroupDetailsPage: React.FC = () => {
     getGroupOptimization,
     setCurrentGroupId,
     expenses,
+    settlements,
     showToast,
   } = useApp();
 
@@ -721,9 +722,22 @@ export const GroupDetailsPage: React.FC = () => {
         <div className="space-y-6">
           {/* Member Net Balances */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
-            <h2 className="text-sm font-bold text-slate-900 mb-4">
-              Individual Member Balances
-            </h2>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Individual Member Balances
+                </h2>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Formula: Net Balance = Total Paid − Total Owed
+                </p>
+              </div>
+              <button
+                onClick={() => navigate('/balances')}
+                className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
+              >
+                + Record Payment
+              </button>
+            </div>
 
             {analysis && analysis.netBalances.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -733,37 +747,45 @@ export const GroupDetailsPage: React.FC = () => {
                   return (
                     <div
                       key={nb.userId}
-                      className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs"
+                      className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2"
                     >
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(
-                            nb.userName
-                          )}`}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${getAvatarColor(
+                              nb.userName
+                            )}`}
+                          >
+                            {nb.userName.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="font-semibold text-slate-900 block truncate">
+                              {nb.userName} {nb.userId === currentUser.id ? '(You)' : ''}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {isPositive ? 'Gets back' : isNegative ? 'Owes group' : 'Settled up'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`font-mono font-bold text-sm tabular-nums ${
+                            isPositive
+                              ? 'text-emerald-600'
+                              : isNegative
+                              ? 'text-rose-600'
+                              : 'text-slate-500'
+                          }`}
                         >
-                          {nb.userName.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div>
-                          <span className="font-semibold text-slate-900 block truncate">
-                            {nb.userName} {nb.userId === currentUser.id ? '(You)' : ''}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {isPositive ? 'Gets back' : isNegative ? 'Owes group' : 'Settled up'}
-                          </span>
-                        </div>
+                          {isPositive ? '+' : ''}
+                          {formatCurrency(nb.balance, group.currency)}
+                        </span>
                       </div>
-                      <span
-                        className={`font-mono font-bold tabular-nums ${
-                          isPositive
-                            ? 'text-emerald-600'
-                            : isNegative
-                            ? 'text-rose-600'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {isPositive ? '+' : ''}
-                        {formatCurrency(nb.balance, group.currency)}
-                      </span>
+
+                      <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Paid: <strong className="font-mono text-slate-700">{formatCurrency(nb.totalPaid, group.currency)}</strong></span>
+                        <span>Owed: <strong className="font-mono text-slate-700">{formatCurrency(nb.totalOwed, group.currency)}</strong></span>
+                      </div>
                     </div>
                   );
                 })}
@@ -803,7 +825,7 @@ export const GroupDetailsPage: React.FC = () => {
                       </span>
                       <button
                         onClick={() => navigate('/balances', { state: { transfer: tx } })}
-                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-[11px] transition-colors"
+                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-[11px] transition-colors cursor-pointer"
                       >
                         Settle
                       </button>
@@ -815,6 +837,55 @@ export const GroupDetailsPage: React.FC = () => {
               <p className="text-xs text-slate-400 py-4 text-center">
                 All balances squared up!
               </p>
+            )}
+          </div>
+
+          {/* Recorded Settlements in this Group */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Recorded Settlements
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Completed peer transfers in {group.name}
+                </p>
+              </div>
+              <span className="text-xs font-mono font-semibold text-slate-400">
+                {settlements.filter((s) => s.groupId === group.id).length} recorded
+              </span>
+            </div>
+
+            {settlements.filter((s) => s.groupId === group.id).length === 0 ? (
+              <p className="text-xs text-slate-400 py-4 text-center">
+                No settlements recorded in this group yet.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {settlements
+                  .filter((s) => s.groupId === group.id)
+                  .map((s) => (
+                    <div
+                      key={s.id}
+                      className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900">{s.payerName}</span>
+                        <span className="text-slate-400">paid</span>
+                        <span className="font-bold text-indigo-700">{s.payeeName}</span>
+                        {s.referenceNote && (
+                          <span className="text-[11px] text-slate-500 hidden sm:inline">· {s.referenceNote}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">{formatDate(s.date)}</span>
+                        <span className="font-mono font-bold text-emerald-600">
+                          {formatCurrency(s.amount, s.currency)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
             )}
           </div>
         </div>

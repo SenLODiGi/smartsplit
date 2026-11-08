@@ -1153,10 +1153,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     return [];
   };
-      console.error('Failed to fetch settlements:', err);
-    }
-    return [];
-  };
 
   const updateCurrentUserProfile = async (data: { name?: string; email?: string }): Promise<boolean> => {
     try {

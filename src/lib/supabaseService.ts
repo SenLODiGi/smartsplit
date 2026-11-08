@@ -382,11 +382,15 @@ export const supabaseApi = {
           const extracted = prof ? extractProfile(prof) : null;
           const name =
             extracted?.name ||
+            gm.display_name ||
             gm.invited_name ||
+            gm.name ||
+            (gm.email ? gm.email.split('@')[0] : '') ||
             (gm.invited_email ? gm.invited_email.split('@')[0] : 'Member');
-          const email = extracted?.email || gm.invited_email || '';
+          const email = extracted?.email || gm.email || gm.invited_email || '';
           const avatar =
             extracted?.avatar ||
+            gm.avatar_url ||
             'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
           const initials = extracted?.initials || name.slice(0, 2).toUpperCase();
 
@@ -478,11 +482,15 @@ export const supabaseApi = {
         const extracted = prof ? extractProfile(prof) : null;
         const name =
           extracted?.name ||
+          gm.display_name ||
           gm.invited_name ||
+          gm.name ||
+          (gm.email ? gm.email.split('@')[0] : '') ||
           (gm.invited_email ? gm.invited_email.split('@')[0] : 'Member');
-        const email = extracted?.email || gm.invited_email || '';
+        const email = extracted?.email || gm.email || gm.invited_email || '';
         const avatar =
           extracted?.avatar ||
+          gm.avatar_url ||
           'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
         const initials = extracted?.initials || name.slice(0, 2).toUpperCase();
 
@@ -686,11 +694,38 @@ export const supabaseApi = {
                   role: 'member',
                 });
               } else {
-                await supabase.from('group_members').insert({
-                  group_id: newGroup.id,
-                  invited_name: clean,
+                let inserted = false;
+                try {
+                  const { error: gErr1 } = await supabase.from('group_members').insert({
+                    group_id: newGroup.id,
+                    display_name: clean,
+                    role: 'member',
+                  });
+                  if (!gErr1) inserted = true;
+                } catch {}
+
+                if (!inserted) {
+                  try {
+                    const { error: gErr2 } = await supabase.from('group_members').insert({
+                      group_id: newGroup.id,
+                      invited_name: clean,
+                      role: 'member',
+                    });
+                    if (!gErr2) inserted = true;
+                  } catch {}
+                }
+
+                // Always cache in local guest store to guarantee availability
+                const guestMember: GroupMember = {
+                  id: `guest_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                  userId: `guest_${Date.now()}`,
+                  name: clean,
+                  email: '',
+                  avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+                  initials: clean.slice(0, 2).toUpperCase(),
                   role: 'member',
-                });
+                };
+                saveLocalGuestMember(newGroup.id, guestMember);
               }
             } catch {}
           }

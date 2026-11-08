@@ -49,6 +49,8 @@ export interface ExpenseItem {
   totalPrice: number;
   assignedTo?: string[]; // userIds
   confidence?: number;
+  isUncertain?: boolean;
+  rawLine?: string;
 }
 
 export interface ExpensePayment {

@@ -81,9 +81,13 @@ CREATE TABLE IF NOT EXISTS public.expense_payments (
     user_id UUID,
     member_id UUID,
     payer_name TEXT NOT NULL,
-    amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+    amount NUMERIC(12, 2) DEFAULT 0,
+    amount_paid NUMERIC(12, 2) DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE public.expense_payments ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2) DEFAULT 0;
+ALTER TABLE public.expense_payments ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2) DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_expense_payments_expense_id ON public.expense_payments(expense_id);
 

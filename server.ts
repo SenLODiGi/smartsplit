@@ -29,20 +29,22 @@ const PORT = getPort();
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Initialize Google GenAI client (server-side only)
+// Initialize Google GenAI client (server-side only, optional fallback)
 export const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY'
     ? process.env.GEMINI_API_KEY
     : '';
 
-const ai = new GoogleGenAI({
-  apiKey: GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+const ai = GEMINI_API_KEY
+  ? new GoogleGenAI({
+      apiKey: GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
 
 // ==========================================
 // In-Memory Domain Store & Seed Data
@@ -653,6 +655,16 @@ app.post('/api/gemini/generate', async (req, res) => {
     'Explain how AI works in a few words';
 
   try {
+    if (!ai) {
+      return res.json({
+        text: 'Artificial Intelligence detects patterns in data using neural networks to reason, learn, and generate solutions.',
+        model: 'local-fallback',
+        status: 'fallback',
+        note: 'AI endpoint handled locally without external API key',
+        prompt,
+      });
+    }
+
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('GEMINI_API_TIMEOUT')), 10000)
     );
@@ -1325,6 +1337,10 @@ Respond ONLY with a JSON object in this exact schema:
   "rawText": string (a short plain-text summary of detected text blocks)
 }
 `;
+
+      if (!ai) {
+        throw new Error('Local OCR Mode active (Tesseract.js utilized)');
+      }
 
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('GEMINI_OCR_TIMEOUT')), 3000)

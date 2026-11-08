@@ -300,6 +300,194 @@ DROP POLICY IF EXISTS "settlement_payments_delete" ON public.settlement_payments
 CREATE POLICY "settlement_payments_delete" ON public.settlement_payments FOR DELETE TO authenticated USING (true);
 
 -- ----------------------------------------------------------------------------
+-- 9.5 ACTIVITIES & NOTIFICATIONS
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.activities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    actor_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    actor_name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    amount NUMERIC(12, 2),
+    currency TEXT DEFAULT 'LKR',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.activities ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "activities_select" ON public.activities;
+CREATE POLICY "activities_select" ON public.activities FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "activities_insert" ON public.activities;
+CREATE POLICY "activities_insert" ON public.activities FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    type TEXT DEFAULT 'expense',
+    read BOOLEAN DEFAULT FALSE NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS is_read BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "notifications_select" ON public.notifications;
+CREATE POLICY "notifications_select" ON public.notifications FOR SELECT TO authenticated USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "notifications_update" ON public.notifications;
+CREATE POLICY "notifications_update" ON public.notifications FOR UPDATE TO authenticated USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "notifications_insert" ON public.notifications;
+CREATE POLICY "notifications_insert" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);
+
+-- ----------------------------------------------------------------------------
+-- 10. AUTOMATIC PROFILE CREATION TRIGGER
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+    initials_calc TEXT;
+    fallback_name TEXT;
+BEGIN
+    fallback_name := COALESCE(
+        NEW.raw_user_meta_data->>'full_name',
+        NEW.raw_user_meta_data->>'name',
+        SPLIT_PART(NEW.email, '@', 1),
+        'Member'
+    );
+    initials_calc := UPPER(SUBSTRING(fallback_name FROM 1 FOR 2));
+    
+    INSERT INTO public.profiles (id, name, full_name, email, avatar, initials)
+    VALUES (
+        NEW.id,
+        fallback_name,
+        fallback_name,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'avatar', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'),
+        initials_calc
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        name = COALESCE(public.profiles.name, EXCLUDED.name),
+        full_name = COALESCE(public.profiles.full_name, EXCLUDED.full_name);
+        
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ----------------------------------------------------------------------------
+-- 11. ATOMIC GROUP CREATION RPC
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.create_group_with_creator(
+    p_name TEXT,
+    p_description TEXT DEFAULT '',
+    p_currency TEXT DEFAULT 'LKR',
+    p_category TEXT DEFAULT 'trip',
+    p_cover_gradient TEXT DEFAULT 'from-emerald-600 to-teal-800',
+    p_member_names TEXT[] DEFAULT ARRAY[]::TEXT[]
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_group_id UUID;
+    v_user_id UUID;
+    v_user_name TEXT;
+    v_name TEXT;
+    v_matched_user_id UUID;
+    v_result JSONB;
+BEGIN
+    v_user_id := auth.uid();
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated';
+    END IF;
+
+    -- 1. Insert Group
+    INSERT INTO public.groups (
+        name,
+        description,
+        currency,
+        category,
+        cover_gradient,
+        created_by
+    )
+    VALUES (
+        trim(p_name),
+        trim(COALESCE(p_description, '')),
+        upper(trim(COALESCE(p_currency, 'LKR'))),
+        COALESCE(p_category, 'trip'),
+        COALESCE(p_cover_gradient, 'from-emerald-600 to-teal-800'),
+        v_user_id
+    )
+    RETURNING id INTO v_group_id;
+
+    -- 2. Insert Creator as Admin
+    INSERT INTO public.group_members (group_id, user_id, role)
+    VALUES (v_group_id, v_user_id, 'admin');
+
+    -- 3. Insert Initial Member Names if provided
+    IF p_member_names IS NOT NULL AND array_length(p_member_names, 1) > 0 THEN
+        FOREACH v_name IN ARRAY p_member_names LOOP
+            v_name := trim(v_name);
+            IF v_name <> '' THEN
+                SELECT id INTO v_matched_user_id
+                FROM public.profiles
+                WHERE lower(email) = lower(v_name) OR lower(name) = lower(v_name) OR lower(full_name) = lower(v_name)
+                LIMIT 1;
+
+                IF v_matched_user_id IS NOT NULL AND v_matched_user_id <> v_user_id THEN
+                    INSERT INTO public.group_members (group_id, user_id, role)
+                    VALUES (v_group_id, v_matched_user_id, 'member')
+                    ON CONFLICT DO NOTHING;
+                ELSIF v_matched_user_id IS NULL THEN
+                    IF v_name LIKE '%@%' THEN
+                        INSERT INTO public.group_members (group_id, email, display_name, role)
+                        VALUES (v_group_id, lower(v_name), split_part(v_name, '@', 1), 'member')
+                        ON CONFLICT DO NOTHING;
+                    ELSE
+                        INSERT INTO public.group_members (group_id, display_name, role)
+                        VALUES (v_group_id, v_name, 'member');
+                    END IF;
+                END IF;
+            END IF;
+        END LOOP;
+    END IF;
+
+    -- 4. Audit Activity
+    SELECT name INTO v_user_name FROM public.profiles WHERE id = v_user_id;
+    INSERT INTO public.activities (group_id, type, actor_name, description)
+    VALUES (
+        v_group_id,
+        'group_created',
+        COALESCE(v_user_name, 'Creator'),
+        'created group "' || trim(p_name) || '"'
+    );
+
+    -- 5. Return JSON Representation
+    SELECT jsonb_build_object(
+        'id', g.id,
+        'name', g.name,
+        'description', g.description,
+        'currency', g.currency,
+        'category', g.category,
+        'cover_gradient', g.cover_gradient,
+        'created_by', g.created_by,
+        'created_at', g.created_at
+    ) INTO v_result
+    FROM public.groups g
+    WHERE g.id = v_group_id;
+
+    RETURN v_result;
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
 -- SUCCESS CONFIRMATION
 -- ----------------------------------------------------------------------------
 SELECT 'SmartSplit master migration applied successfully!' AS status;

@@ -150,7 +150,7 @@ export const AuthPage: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Kasun Perera"
+                  placeholder="e.g. Kaju Chandrakumar"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"

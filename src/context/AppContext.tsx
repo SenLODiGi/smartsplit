@@ -10,12 +10,17 @@ import {
   SettlementAnalysis,
 } from '../types';
 import { ToastItem, ToastContainer } from '../components/common/ToastContainer';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabaseApi } from '../lib/supabaseService';
+import { calculateGroupBalancesAndOptimization } from '../utils/debtOptimizer';
 
 interface AppContextType {
   currentUser: User;
   isAuthenticated: boolean;
   login: () => void;
   logout: () => void;
+  signInWithEmail?: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signUpWithEmail?: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
   groups: Group[];
   currentGroupId: string;
   setCurrentGroupId: (id: string) => void;
@@ -81,6 +86,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [preferredCurrency, setPreferredCurrency] = useState<string>('LKR');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
 
   // Toast dispatch
   const dismissToast = useCallback((id: string) => {
@@ -117,38 +123,112 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const activeGroup = groups.find((g) => g.id === currentGroupId) || groups[0];
 
+  // ============================================================================
+  // SUPABASE AUTH SESSION LISTENER
+  // ============================================================================
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        const uName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User';
+        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+        setCurrentUser({
+          id: session.user.id,
+          name: uName,
+          email: session.user.email || '',
+          avatar: session.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+          initials: uInitials,
+        });
+        setIsAuthenticated(true);
+        setIsDemoMode(false);
+      }
+    }).catch(console.warn);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const uName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User';
+        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+        setCurrentUser({
+          id: session.user.id,
+          name: uName,
+          email: session.user.email || '',
+          avatar: session.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+          initials: uInitials,
+        });
+        setIsAuthenticated(true);
+        setIsDemoMode(false);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   const refreshData = async () => {
     try {
       setIsLoading(true);
-      const [groupsRes, historyRes, notifsRes, stlRes] = await Promise.all([
-        fetch('/api/groups').then((r) => (r.ok ? r.json() : { groups: [] })),
-        fetch('/api/history').then((r) => (r.ok ? r.json() : { activities: [] })),
-        fetch('/api/notifications').then((r) => (r.ok ? r.json() : { notifications: [] })),
-        fetch('/api/settlements').then((r) => (r.ok ? r.json() : { settlements: [] })),
-      ]);
 
-      if (groupsRes.groups && groupsRes.groups.length > 0) {
-        setGroups(groupsRes.groups);
-        if (!groupsRes.groups.some((g: Group) => g.id === currentGroupId)) {
-          setCurrentGroupId(groupsRes.groups[0].id);
+      // 1. Try Supabase first if configured and not strictly in demo mode
+      let loadedGroups: Group[] = [];
+      let loadedActivities: ActivityItem[] = [];
+      let loadedNotifications: NotificationItem[] = [];
+      let loadedSettlements: SettlementPayment[] = [];
+
+      if (isSupabaseConfigured && !isDemoMode) {
+        const [sbGroups, sbActs, sbNotifs, sbStls] = await Promise.all([
+          supabaseApi.getGroups(),
+          supabaseApi.getActivities(),
+          supabaseApi.getNotifications(currentUser.id),
+          supabaseApi.getSettlements(),
+        ]);
+
+        if (sbGroups && sbGroups.length > 0) {
+          loadedGroups = sbGroups;
+          loadedActivities = sbActs;
+          loadedNotifications = sbNotifs;
+          loadedSettlements = sbStls;
         }
       }
 
-      if (historyRes.activities) {
-        setActivities(historyRes.activities);
+      // 2. If Supabase returned empty or in demo mode, load seed API state
+      if (loadedGroups.length === 0) {
+        const [groupsRes, historyRes, notifsRes, stlRes] = await Promise.all([
+          fetch('/api/groups').then((r) => (r.ok ? r.json() : { groups: [] })),
+          fetch('/api/history').then((r) => (r.ok ? r.json() : { activities: [] })),
+          fetch('/api/notifications').then((r) => (r.ok ? r.json() : { notifications: [] })),
+          fetch('/api/settlements').then((r) => (r.ok ? r.json() : { settlements: [] })),
+        ]);
+
+        loadedGroups = groupsRes.groups || [];
+        loadedActivities = historyRes.activities || [];
+        loadedNotifications = notifsRes.notifications || [];
+        loadedSettlements = stlRes.settlements || [];
       }
 
-      if (notifsRes.notifications) {
-        setNotifications(notifsRes.notifications);
+      if (loadedGroups.length > 0) {
+        setGroups(loadedGroups);
+        if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
+          setCurrentGroupId(loadedGroups[0].id);
+        }
       }
 
-      if (stlRes.settlements) {
-        setSettlements(stlRes.settlements);
-      }
+      setActivities(loadedActivities);
+      setNotifications(loadedNotifications);
+      setSettlements(loadedSettlements);
 
-      // Fetch expenses for the current active group
-      const targetGroupId = currentGroupId || (groupsRes.groups?.[0]?.id ?? 'grp_ella_weekend');
+      // Fetch expenses for current active group
+      const targetGroupId = currentGroupId || (loadedGroups[0]?.id ?? 'grp_ella_weekend');
       if (targetGroupId) {
+        if (isSupabaseConfigured && !isDemoMode) {
+          const sbExpenses = await supabaseApi.getExpenses(targetGroupId);
+          if (sbExpenses && sbExpenses.length > 0) {
+            setExpenses(sbExpenses);
+            return;
+          }
+        }
+
         const expRes = await fetch(`/api/groups/${targetGroupId}/expenses`).then((r) =>
           r.ok ? r.json() : { expenses: [] }
         );
@@ -157,7 +237,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
     } catch (err) {
-      console.warn('API sync warning (using cached/fallback state):', err);
+      console.warn('Data sync notice:', err);
     } finally {
       setIsLoading(false);
     }
@@ -165,29 +245,141 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     refreshData();
-  }, []);
+  }, [isDemoMode]);
 
   useEffect(() => {
     if (currentGroupId) {
-      fetch(`/api/groups/${currentGroupId}/expenses`)
-        .then((r) => (r.ok ? r.json() : { expenses: [] }))
-        .then((res) => {
-          if (res.expenses) setExpenses(res.expenses);
-        })
-        .catch(console.error);
+      if (isSupabaseConfigured && !isDemoMode) {
+        supabaseApi.getExpenses(currentGroupId).then((res) => {
+          if (res && res.length > 0) {
+            setExpenses(res);
+            return;
+          }
+          fetch(`/api/groups/${currentGroupId}/expenses`)
+            .then((r) => (r.ok ? r.json() : { expenses: [] }))
+            .then((resp) => { if (resp.expenses) setExpenses(resp.expenses); })
+            .catch(console.error);
+        });
+      } else {
+        fetch(`/api/groups/${currentGroupId}/expenses`)
+          .then((r) => (r.ok ? r.json() : { expenses: [] }))
+          .then((res) => {
+            if (res.expenses) setExpenses(res.expenses);
+          })
+          .catch(console.error);
+      }
     }
-  }, [currentGroupId]);
+  }, [currentGroupId, isDemoMode]);
 
+  // Auth actions
   const login = () => {
     setIsAuthenticated(true);
-    showToast(`Welcome back, ${currentUser.name}!`, 'success');
+    setIsDemoMode(true);
+    setCurrentUser(defaultUser);
+    showToast(`Welcome back, ${defaultUser.name}! (Demo Mode)`, 'success');
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      if (isSupabaseConfigured) {
+        await supabase.auth.signOut();
+      }
+    } catch (e) {
+      console.warn('Sign out warning:', e);
+    }
     setIsAuthenticated(false);
+    setIsDemoMode(false);
+    setCurrentUser(defaultUser);
     showToast('You have been logged out.', 'info');
   };
 
+  const signInWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setIsLoading(true);
+      if (!isSupabaseConfigured) {
+        login();
+        return { success: true };
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        showToast(error.message, 'error');
+        return { success: false, error: error.message };
+      }
+
+      if (data.user) {
+        const uName = data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'User';
+        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+        setCurrentUser({
+          id: data.user.id,
+          name: uName,
+          email: data.user.email || '',
+          avatar: data.user.user_metadata?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+          initials: uInitials,
+        });
+        setIsAuthenticated(true);
+        setIsDemoMode(false);
+        showToast(`Welcome back, ${uName}!`, 'success');
+        return { success: true };
+      }
+      return { success: false, error: 'Sign in failed' };
+    } catch (err: any) {
+      showToast(err.message || 'Error signing in', 'error');
+      return { success: false, error: err.message };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const signUpWithEmail = async (email: string, password: string, name: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setIsLoading(true);
+      if (!isSupabaseConfigured) {
+        login();
+        return { success: true };
+      }
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name: name.trim(),
+            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+          },
+        },
+      });
+
+      if (error) {
+        showToast(error.message, 'error');
+        return { success: false, error: error.message };
+      }
+
+      if (data.user) {
+        const uName = name.trim() || data.user.email?.split('@')[0] || 'User';
+        const uInitials = uName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+        setCurrentUser({
+          id: data.user.id,
+          name: uName,
+          email: data.user.email || '',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+          initials: uInitials,
+        });
+        setIsAuthenticated(true);
+        setIsDemoMode(false);
+        showToast(`Account created! Welcome, ${uName}!`, 'success');
+        return { success: true };
+      }
+      return { success: false, error: 'Sign up failed' };
+    } catch (err: any) {
+      showToast(err.message || 'Error signing up', 'error');
+      return { success: false, error: err.message };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Group operations
   const createGroup = async (data: {
     name: string;
     description?: string;
@@ -196,6 +388,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     memberNames?: string[];
   }): Promise<Group | null> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const created = await supabaseApi.createGroup({
+          ...data,
+          userId: currentUser.id,
+        });
+        if (created) {
+          await refreshData();
+          setCurrentGroupId(created.id);
+          showToast(`Group "${created.name}" created successfully!`, 'success');
+          return created;
+        }
+      }
+
       const res = await fetch('/api/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -223,6 +428,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     data: { name?: string; description?: string; currency?: string; category?: any }
   ): Promise<Group | null> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const ok = await supabaseApi.updateGroup(groupId, data);
+        if (ok) {
+          await refreshData();
+          showToast('Group details updated successfully!', 'success');
+          return activeGroup || null;
+        }
+      }
+
       const res = await fetch(`/api/groups/${groupId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -246,6 +460,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteGroup = async (groupId: string): Promise<boolean> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const ok = await supabaseApi.deleteGroup(groupId);
+        if (ok) {
+          await refreshData();
+          showToast('Group deleted successfully.', 'info');
+          return true;
+        }
+      }
+
       const res = await fetch(`/api/groups/${groupId}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshData();
@@ -304,15 +527,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // Expense operations
   const createExpense = async (expenseData: any): Promise<Expense | null> => {
     try {
+      const payload = {
+        ...expenseData,
+        groupId: expenseData.groupId || currentGroupId,
+      };
+
+      if (isSupabaseConfigured && !isDemoMode) {
+        const sbCreated = await supabaseApi.createExpense(payload);
+        if (sbCreated) {
+          await refreshData();
+          showToast(`Expense "${sbCreated.title}" added and split!`, 'success');
+          return sbCreated;
+        }
+      }
+
       const res = await fetch('/api/expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...expenseData,
-          groupId: expenseData.groupId || currentGroupId,
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         const json = await res.json();
@@ -355,6 +590,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteExpense = async (expenseId: string): Promise<boolean> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const ok = await supabaseApi.deleteExpense(expenseId);
+        if (ok) {
+          await refreshData();
+          showToast('Expense deleted successfully.', 'info');
+          return true;
+        }
+      }
+
       const res = await fetch(`/api/expenses/${expenseId}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshData();
@@ -371,15 +615,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return false;
   };
 
+  // Settlements
   const recordSettlement = async (paymentData: any): Promise<SettlementPayment | null> => {
     try {
+      const payload = {
+        ...paymentData,
+        groupId: paymentData.groupId || currentGroupId,
+      };
+
+      if (isSupabaseConfigured && !isDemoMode) {
+        const sbPayment = await supabaseApi.recordSettlement(payload);
+        if (sbPayment) {
+          await refreshData();
+          showToast(`Settlement recorded! ${sbPayment.payerName} → ${sbPayment.payeeName}`, 'success');
+          return sbPayment;
+        }
+      }
+
       const res = await fetch('/api/settlements/payments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...paymentData,
-          groupId: paymentData.groupId || currentGroupId,
-        }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         const json = await res.json();
@@ -397,8 +653,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return null;
   };
 
+  // Debt minimization calculation (Client-side greedy bipartite engine)
   const getGroupOptimization = async (groupId: string): Promise<SettlementAnalysis | null> => {
     try {
+      const targetGroup = groups.find((g) => g.id === groupId);
+      if (targetGroup) {
+        return calculateGroupBalancesAndOptimization(targetGroup, expenses, settlements);
+      }
       const res = await fetch(`/api/groups/${groupId}/balances`);
       if (res.ok) {
         return await res.json();
@@ -425,6 +686,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateCurrentUserProfile = async (data: { name?: string; email?: string }): Promise<boolean> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const { error } = await supabase.from('profiles').update({
+          name: data.name,
+          email: data.email,
+        }).eq('id', currentUser.id);
+
+        if (!error) {
+          setCurrentUser((prev) => ({
+            ...prev,
+            name: data.name || prev.name,
+            email: data.email || prev.email,
+            initials: (data.name || prev.name).slice(0, 2).toUpperCase(),
+          }));
+          showToast('Profile updated successfully!', 'success');
+          return true;
+        }
+      }
+
       const res = await fetch('/api/users/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -447,6 +726,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return false;
   };
 
+  // OCR Pipeline
   const processOCR = async (imageBase64?: string, preset?: string): Promise<OCRResult | null> => {
     try {
       setActiveOCR((prev) => ({ ...prev, step: 'processing' }));
@@ -470,7 +750,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         console.warn('Network error during OCR fetch:', fetchErr);
       }
 
-      // If backend was unreachable or returned non-JSON, provide client-side fallback receipt
       if (!ocrResult) {
         if (preset === 'keells_super') {
           ocrResult = {
@@ -535,7 +814,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return null;
       }
 
-      // Auto-assign items equally across all current group members initially
       const initialAssignments: Record<string, string[]> = {};
       const memberIds = activeGroup ? activeGroup.members.map((m) => m.userId) : [currentUser.id];
       ocrResult.items.forEach((item) => {
@@ -570,7 +848,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const markNotificationRead = async (id: string) => {
     try {
-      await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+      if (isSupabaseConfigured && !isDemoMode) {
+        await supabaseApi.markNotificationRead(id);
+      } else {
+        await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+      }
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
       );
@@ -581,7 +863,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const markAllNotificationsRead = async () => {
     try {
-      await fetch('/api/notifications/read-all', { method: 'POST' });
+      if (isSupabaseConfigured && !isDemoMode) {
+        await supabaseApi.markAllNotificationsRead(currentUser.id);
+      } else {
+        await fetch('/api/notifications/read-all', { method: 'POST' });
+      }
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
       showToast('All notifications marked as read.', 'info');
     } catch (err) {
@@ -607,6 +893,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isAuthenticated,
         login,
         logout,
+        signInWithEmail,
+        signUpWithEmail,
         groups,
         currentGroupId,
         setCurrentGroupId,

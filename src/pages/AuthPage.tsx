@@ -10,17 +10,41 @@ export const AuthPage: React.FC = () => {
   const [email, setEmail] = useState('kasun.p@example.com');
   const [password, setPassword] = useState('••••••••••••');
   const [name, setName] = useState('Kasun Perera');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { login } = useApp();
+  const { login, signInWithEmail, signUpWithEmail } = useApp();
   const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login();
-    if (mode === 'signup') {
-      navigate('/onboarding');
-    } else {
-      navigate('/dashboard');
+    setIsSubmitting(true);
+
+    try {
+      if (mode === 'signup') {
+        if (signUpWithEmail) {
+          const res = await signUpWithEmail(email, password, name);
+          if (res.success) {
+            navigate('/onboarding');
+            return;
+          }
+        } else {
+          login();
+          navigate('/onboarding');
+        }
+      } else {
+        if (signInWithEmail) {
+          const res = await signInWithEmail(email, password);
+          if (res.success) {
+            navigate('/dashboard');
+            return;
+          }
+        } else {
+          login();
+          navigate('/dashboard');
+        }
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -54,7 +78,7 @@ export const AuthPage: React.FC = () => {
           <button
             type="button"
             onClick={handleDemoSignIn}
-            className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2"
+            className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <Sparkles className="w-4 h-4 text-indigo-200" />
             <span>Instant Demo Login (as Kasun Perera)</span>
@@ -113,9 +137,16 @@ export const AuthPage: React.FC = () => {
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs transition-colors"
+              disabled={isSubmitting}
+              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-70 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
             >
-              {mode === 'login' ? 'Sign In to Account' : 'Create Free Account'}
+              {isSubmitting
+                ? mode === 'login'
+                  ? 'Signing In...'
+                  : 'Creating Account...'
+                : mode === 'login'
+                ? 'Sign In to Account'
+                : 'Create Free Account'}
             </button>
           </form>
 
@@ -123,7 +154,7 @@ export const AuthPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-              className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold"
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer"
             >
               {mode === 'login'
                 ? "Don't have an account? Sign up free"

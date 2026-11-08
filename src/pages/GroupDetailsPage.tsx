@@ -20,6 +20,8 @@ import {
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDate, getAvatarColor } from '../utils/formatters';
 import { Group, Expense, SettlementAnalysis } from '../types';
+import { supabaseApi } from '../lib/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 export const GroupDetailsPage: React.FC = () => {
   const { groupId } = useParams<{ groupId: string }>();
@@ -27,6 +29,7 @@ export const GroupDetailsPage: React.FC = () => {
   const {
     groups,
     currentUser,
+    isLoading,
     deleteExpense,
     updateExpense,
     addMemberToGroup,
@@ -72,12 +75,22 @@ export const GroupDetailsPage: React.FC = () => {
     if (groupId) {
       setCurrentGroupId(groupId);
       const found = groups.find((g) => g.id === groupId);
-      setGroup(found);
       if (found) {
+        setGroup(found);
         setEditGroupName(found.name);
         setEditGroupDesc(found.description || '');
         setEditGroupCategory(found.category || 'trip');
         setEditGroupCurrency(found.currency || 'LKR');
+      } else if (isSupabaseConfigured) {
+        supabaseApi.getGroupById(groupId).then((g) => {
+          if (g) {
+            setGroup(g);
+            setEditGroupName(g.name);
+            setEditGroupDesc(g.description || '');
+            setEditGroupCategory(g.category || 'trip');
+            setEditGroupCurrency(g.currency || 'LKR');
+          }
+        });
       }
 
       // Sync expenses
@@ -99,6 +112,17 @@ export const GroupDetailsPage: React.FC = () => {
       });
     }
   }, [groupId, groups, expenses]);
+
+  if (isLoading && !group) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="flex flex-col items-center gap-2">
+          <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-slate-500 font-medium">Loading group details...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!group) {
     return (

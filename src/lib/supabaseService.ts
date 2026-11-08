@@ -497,7 +497,15 @@ export const supabaseApi = {
           role: 'member',
         });
 
-        if (invErr) throw invErr;
+        if (invErr) {
+          if (invErr.message.includes('column') || invErr.message.includes('invited_name')) {
+            return {
+              success: false,
+              error: 'Database update required: Please run supabase_phase2_migration.sql in Supabase SQL Editor to enable invited guests.',
+            };
+          }
+          throw invErr;
+        }
       }
 
       // 3. Log activity
@@ -506,7 +514,7 @@ export const supabaseApi = {
         type: 'member_added',
         actor_name: 'Admin',
         description: `added ${cleanName || cleanEmail} to the group`,
-      });
+      }).catch(() => {});
 
       return { success: true };
     } catch (err: any) {
@@ -536,7 +544,7 @@ export const supabaseApi = {
         type: 'member_added',
         actor_name: 'Admin',
         description: 'removed a member from the group',
-      });
+      }).catch(() => {});
 
       return { success: true };
     } catch (err: any) {

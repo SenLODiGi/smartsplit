@@ -35,13 +35,23 @@ export function mapGroupFromDb(row: any, members: GroupMember[] = []): Group {
 }
 
 export function mapExpenseFromDb(row: any): Expense {
-  const splits: ExpenseSplit[] = (row.expense_splits || []).map((s: any) => ({
-    userId: s.user_id,
-    userName: s.profiles?.name || 'Member',
-    amount: Number(s.amount) || 0,
-    percentage: s.percentage ? Number(s.percentage) : undefined,
-    shares: s.shares ? Number(s.shares) : undefined,
-  }));
+  const splits: ExpenseSplit[] = (row.expense_splits || []).map((s: any) => {
+    const rawId = s.user_id || s.member_id || s.id;
+    const name =
+      s.profiles?.name ||
+      s.group_members?.invited_name ||
+      s.invited_name ||
+      s.userName ||
+      'Member';
+
+    return {
+      userId: rawId,
+      userName: name,
+      amount: Number(s.amount) || 0,
+      percentage: s.percentage ? Number(s.percentage) : undefined,
+      shares: s.shares ? Number(s.shares) : undefined,
+    };
+  });
 
   const items: ExpenseItem[] = (row.expense_items || []).map((i: any) => ({
     id: i.id,
@@ -53,6 +63,13 @@ export function mapExpenseFromDb(row: any): Expense {
     assignedTo: (i.expense_item_assignments || []).map((a: any) => a.user_id),
   }));
 
+  const payerName =
+    row.profiles?.name ||
+    row.payer?.name ||
+    row.payer_name ||
+    row.payer_member?.invited_name ||
+    'Member';
+
   return {
     id: row.id,
     groupId: row.group_id,
@@ -60,8 +77,8 @@ export function mapExpenseFromDb(row: any): Expense {
     amount: Number(row.amount) || 0,
     currency: row.currency || 'LKR',
     category: row.category || 'food',
-    payerId: row.payer_id,
-    payerName: row.profiles?.name || 'Member',
+    payerId: row.payer_id || row.payer_member_id || '',
+    payerName,
     date: row.expense_date || new Date().toISOString().slice(0, 10),
     splitMethod: row.split_method || 'equal',
     splits,

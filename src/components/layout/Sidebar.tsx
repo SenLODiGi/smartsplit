@@ -62,11 +62,17 @@ export const Sidebar: React.FC = () => {
             onChange={(e) => setCurrentGroupId(e.target.value)}
             className="w-full appearance-none bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-lg px-3 py-2 text-xs font-medium text-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
           >
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name} ({g.currency})
+            {groups.length === 0 ? (
+              <option value="" disabled>
+                No groups created yet
               </option>
-            ))}
+            ) : (
+              groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} ({g.currency})
+                </option>
+              ))
+            )}
           </select>
           <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3 pointer-events-none" />
         </div>

@@ -75,6 +75,29 @@ export const DashboardPage: React.FC = () => {
     }
   };
 
+  if (groups.length === 0) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center max-w-lg mx-auto shadow-2xs my-10">
+        <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-4">
+          <Users2 className="w-6 h-6" />
+        </div>
+        <h2 className="text-base font-bold text-slate-900 mb-1">
+          Welcome to SmartSplit, {currentUser.name.split(' ')[0]}!
+        </h2>
+        <p className="text-xs text-slate-500 mb-6 max-w-sm mx-auto leading-relaxed">
+          You don't have any expense groups yet. Create a group to start splitting bills, scanning receipts with OCR, and tracking shared balances.
+        </p>
+        <button
+          onClick={() => navigate('/groups/create')}
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
+        >
+          <PlusCircle className="w-4 h-4" />
+          <span>Create Your First Group</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Greeting & Workspace Switcher */}

@@ -168,6 +168,3 @@ export const GroupsListPage: React.FC = () => {
     </div>
   );
 };
-    </div>
-  );
-};

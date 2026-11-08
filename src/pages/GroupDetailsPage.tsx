@@ -35,6 +35,7 @@ export const GroupDetailsPage: React.FC = () => {
     deleteGroup,
     getGroupOptimization,
     setCurrentGroupId,
+    expenses,
     showToast,
   } = useApp();
 
@@ -79,19 +80,25 @@ export const GroupDetailsPage: React.FC = () => {
         setEditGroupCurrency(found.currency || 'LKR');
       }
 
-      // Fetch expenses
-      fetch(`/api/groups/${groupId}/expenses`)
-        .then((r) => (r.ok ? r.json() : { expenses: [] }))
-        .then((res) => {
-          if (res.expenses) setGroupExpenses(res.expenses);
-        });
+      // Sync expenses
+      const groupSpecific = expenses.filter((e) => e.groupId === groupId);
+      if (groupSpecific.length > 0) {
+        setGroupExpenses(groupSpecific);
+      } else {
+        fetch(`/api/groups/${groupId}/expenses`)
+          .then((r) => (r.ok ? r.json() : { expenses: [] }))
+          .then((res) => {
+            if (res.expenses) setGroupExpenses(res.expenses);
+          })
+          .catch(() => {});
+      }
 
       // Fetch analysis
       getGroupOptimization(groupId).then((res) => {
         if (res) setAnalysis(res);
       });
     }
-  }, [groupId, groups]);
+  }, [groupId, groups, expenses]);
 
   if (!group) {
     return (

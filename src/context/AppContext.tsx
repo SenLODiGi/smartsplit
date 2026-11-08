@@ -324,16 +324,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           supabaseApi.getSettlements(),
         ]);
 
-        if (sbGroups && sbGroups.length > 0) {
-          loadedGroups = sbGroups;
-          loadedActivities = sbActs;
-          loadedNotifications = sbNotifs;
-          loadedSettlements = sbStls;
-        }
-      }
+        loadedGroups = sbGroups || [];
+        loadedActivities = sbActs || [];
+        loadedNotifications = sbNotifs || [];
+        loadedSettlements = sbStls || [];
 
-      // 2. If Supabase is empty or app is in Demo Mode, load the rich seed dataset
-      if (loadedGroups.length === 0) {
+        setGroups(loadedGroups);
+        if (loadedGroups.length > 0) {
+          if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
+            setCurrentGroupId(loadedGroups[0].id);
+          }
+        } else {
+          setCurrentGroupId('');
+        }
+      } else {
+        // 2. In Demo Mode, load the rich seed dataset
         const [groupsRes, historyRes, notifsRes, stlRes] = await Promise.all([
           fetch('/api/groups').then((r) => (r.ok ? r.json() : { groups: [] })),
           fetch('/api/history').then((r) => (r.ok ? r.json() : { activities: [] })),
@@ -345,12 +350,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         loadedActivities = historyRes.activities || [];
         loadedNotifications = notifsRes.notifications || [];
         loadedSettlements = stlRes.settlements || [];
-      }
 
-      if (loadedGroups.length > 0) {
         setGroups(loadedGroups);
-        if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
-          setCurrentGroupId(loadedGroups[0].id);
+        if (loadedGroups.length > 0) {
+          if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
+            setCurrentGroupId(loadedGroups[0].id);
+          }
         }
       }
 

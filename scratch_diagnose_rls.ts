@@ -101,17 +101,18 @@ async function diagnose() {
 
   console.log('Insert WITH select Error:', gmWithSelErr);
 
-  console.log('--- 5. Testing RPC create_group_with_creator ---');
-  const { data: rpcRes, error: rpcErr } = await supabase.rpc('create_group_with_creator', {
-    p_name: 'RPC Onboarding Group',
-    p_description: 'Created via RPC',
-    p_currency: 'LKR',
-    p_category: 'trip',
-    p_cover_gradient: 'from-blue-600 to-indigo-800',
-    p_member_names: ['Member A', 'Member B']
-  });
+  console.log('--- 5. Testing Helper Functions ---');
+  const { data: isMemGid, error: errGid } = await supabase.rpc('is_group_member', { gid: grp.id });
+  console.log('is_group_member(gid):', isMemGid, 'Err:', errGid?.message);
 
-  console.log('RPC result:', rpcRes, 'RPC Error:', rpcErr);
+  const { data: isMemG_id, error: errG_id } = await supabase.rpc('is_group_member', { g_id: grp.id });
+  console.log('is_group_member(g_id):', isMemG_id, 'Err:', errG_id?.message);
+
+  const { data: isAdmGid, error: errAdmGid } = await supabase.rpc('is_group_admin', { gid: grp.id });
+  console.log('is_group_admin(gid):', isAdmGid, 'Err:', errAdmGid?.message);
+
+  const { data: isAdmG_id, error: errAdmG_id } = await supabase.rpc('is_group_admin', { g_id: grp.id });
+  console.log('is_group_admin(g_id):', isAdmG_id, 'Err:', errAdmG_id?.message);
 }
 
 diagnose();

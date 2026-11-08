@@ -1810,21 +1810,33 @@ export const supabaseApi = {
         });
       } catch {}
 
-      return mapExpenseFromDb({ ...updatedExp, expense_splits: expenseData.splits });
+      const mappedUpdated = mapExpenseFromDb({ ...updatedExp, expense_splits: expenseData.splits });
+      if (updatedExp.group_id) {
+        saveLocalExpense(updatedExp.group_id, mappedUpdated);
+      }
+      return mappedUpdated;
     } catch (err) {
       console.error('updateExpense error:', err);
       return null;
     }
   },
 
-  async deleteExpense(expenseId: string): Promise<boolean> {
-    if (!isSupabaseConfigured) return false;
+  async deleteExpense(expenseId: string, groupId?: string): Promise<boolean> {
+    if (!isSupabaseConfigured) {
+      if (groupId) removeLocalExpense(groupId, expenseId);
+      return true;
+    }
     try {
       const { data: exp } = await supabase
         .from('expenses')
         .select('id, group_id, title, receipt_url')
         .eq('id', expenseId)
         .maybeSingle();
+
+      const targetGroupId = exp?.group_id || groupId;
+      if (targetGroupId) {
+        removeLocalExpense(targetGroupId, expenseId);
+      }
 
       const { error } = await supabase.from('expenses').delete().eq('id', expenseId);
       if (error) throw error;

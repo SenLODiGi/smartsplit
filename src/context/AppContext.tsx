@@ -993,6 +993,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await refreshData();
           showToast(`Expense "${sbCreated.title}" added and split!`, 'success');
           return sbCreated;
+        } else {
+          showToast('Failed to save expense. Please verify fields and connection.', 'error');
+          return null;
         }
       }
 

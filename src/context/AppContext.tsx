@@ -89,7 +89,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User>(defaultUser);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [currentGroupId, setCurrentGroupId] = useState<string>('grp_ella_weekend');
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -99,7 +99,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [preferredCurrency, setPreferredCurrency] = useState<string>('LKR');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('smartsplit_demo_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Toast dispatch
   const dismissToast = useCallback((id: string) => {
@@ -210,7 +216,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const initAuth = async () => {
       try {
         if (!isSupabaseConfigured) {
-          if (isMounted) setIsLoading(false);
+          const wasInDemo = localStorage.getItem('smartsplit_demo_mode') === 'true';
+          if (isMounted) {
+            setIsAuthenticated(wasInDemo);
+            setIsDemoMode(wasInDemo);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -224,6 +235,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
 
         if (session?.user && isMounted) {
+          try {
+            localStorage.removeItem('smartsplit_demo_mode');
+          } catch {}
           const userObj = await syncUserProfile(session.user);
           if (isMounted) {
             setCurrentUser(userObj);
@@ -231,10 +245,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             setIsDemoMode(false);
           }
         } else if (isMounted) {
-          // If no active Supabase session on fresh load, start in demo mode with default user
-          setIsAuthenticated(true);
-          setIsDemoMode(true);
-          setCurrentUser(defaultUser);
+          // Check if user previously logged in via Instant Demo Mode
+          let wasInDemo = false;
+          try {
+            wasInDemo = localStorage.getItem('smartsplit_demo_mode') === 'true';
+          } catch {}
+
+          if (wasInDemo) {
+            setIsAuthenticated(true);
+            setIsDemoMode(true);
+            setCurrentUser(defaultUser);
+          } else {
+            setIsAuthenticated(false);
+            setIsDemoMode(false);
+          }
         }
       } catch (err) {
         console.warn('Auth initialization error:', err);
@@ -251,6 +275,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (!isMounted) return;
 
       if (session?.user) {
+        try {
+          localStorage.removeItem('smartsplit_demo_mode');
+        } catch {}
         const userObj = await syncUserProfile(session.user);
         if (isMounted) {
           setCurrentUser(userObj);
@@ -258,6 +285,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setIsDemoMode(false);
         }
       } else if (event === 'SIGNED_OUT') {
+        try {
+          localStorage.removeItem('smartsplit_demo_mode');
+        } catch {}
         if (isMounted) {
           setIsAuthenticated(false);
           setIsDemoMode(false);
@@ -388,6 +418,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Demo Login (One-click instant login for testing/evaluators)
   const login = () => {
+    try {
+      localStorage.setItem('smartsplit_demo_mode', 'true');
+    } catch {}
     setIsAuthenticated(true);
     setIsDemoMode(true);
     setCurrentUser(defaultUser);
@@ -398,6 +431,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const logout = async (): Promise<void> => {
     try {
       setIsLoading(true);
+      try {
+        localStorage.removeItem('smartsplit_demo_mode');
+      } catch {}
       if (isSupabaseConfigured) {
         await supabase.auth.signOut();
       }
@@ -446,6 +482,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       if (data.user) {
+        try {
+          localStorage.removeItem('smartsplit_demo_mode');
+        } catch {}
         const resolvedUser = await syncUserProfile(data.user);
         setCurrentUser(resolvedUser);
         setIsAuthenticated(true);
@@ -518,6 +557,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       if (data.user && data.session) {
+        try {
+          localStorage.removeItem('smartsplit_demo_mode');
+        } catch {}
         const resolvedUser = await syncUserProfile(data.user);
         setCurrentUser(resolvedUser);
         setIsAuthenticated(true);

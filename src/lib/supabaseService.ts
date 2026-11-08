@@ -719,7 +719,7 @@ export const supabaseApi = {
     groupId: string,
     name: string,
     email?: string
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; warning?: string }> {
     if (!isSupabaseConfigured) return { success: false, error: 'Supabase not configured' };
     try {
       const cleanName = name.trim();
@@ -1213,6 +1213,7 @@ export const supabaseApi = {
           user_id: pUserId,
           member_id: pMemberId,
           payer_name: pName,
+          amount: Number(p.amount) || 0,
           amount_paid: Number(p.amount) || 0,
         });
       }
@@ -1488,6 +1489,7 @@ export const supabaseApi = {
             user_id: pUserId,
             member_id: pMemberId,
             payer_name: pName,
+            amount: Number(p.amount) || 0,
             amount_paid: Number(p.amount) || 0,
           });
         }

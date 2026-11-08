@@ -28,6 +28,8 @@ export interface Group {
   totalSpend?: number;
   expensesCount?: number;
   userNetBalance?: number;
+  createdBy?: string;
+  creatorName?: string;
 }
 
 export interface ExpenseSplit {

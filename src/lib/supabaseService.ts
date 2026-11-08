@@ -16,6 +16,7 @@ import {
  */
 
 export function mapGroupFromDb(row: any, members: GroupMember[] = []): Group {
+  const creatorMember = members.find((m) => m.userId === row.created_by);
   return {
     id: row.id,
     name: row.name,
@@ -28,6 +29,8 @@ export function mapGroupFromDb(row: any, members: GroupMember[] = []): Group {
     totalSpend: 0,
     expensesCount: 0,
     userNetBalance: 0,
+    createdBy: row.created_by,
+    creatorName: row.creator?.name || creatorMember?.name || 'Group Admin',
   };
 }
 
@@ -119,14 +122,21 @@ export const supabaseApi = {
   async getGroups(): Promise<Group[]> {
     if (!isSupabaseConfigured) return [];
     try {
-      const { data: groupsData, error: groupsErr } = await supabase
+      let groupsData: any = null;
+      let groupsErr: any = null;
+
+      // Primary query with invited members and creator
+      const res = await supabase
         .from('groups')
         .select(`
           *,
+          creator:created_by ( id, name, email ),
           group_members (
             id,
             user_id,
             role,
+            invited_name,
+            invited_email,
             profiles (
               id,
               name,
@@ -138,26 +148,123 @@ export const supabaseApi = {
         `)
         .order('created_at', { ascending: false });
 
+      groupsData = res.data;
+      groupsErr = res.error;
+
+      // Fallback query if invited columns not yet migrated
+      if (groupsErr && (groupsErr.message.includes('invited_name') || groupsErr.message.includes('column'))) {
+        const fallbackRes = await supabase
+          .from('groups')
+          .select(`
+            *,
+            creator:created_by ( id, name, email ),
+            group_members (
+              id,
+              user_id,
+              role,
+              profiles (
+                id,
+                name,
+                email,
+                avatar,
+                initials
+              )
+            )
+          `)
+          .order('created_at', { ascending: false });
+        groupsData = fallbackRes.data;
+        groupsErr = fallbackRes.error;
+      }
+
       if (groupsErr || !groupsData) {
         console.warn('Supabase getGroups notice:', groupsErr?.message);
         return [];
       }
 
       return groupsData.map((g: any) => {
-        const members: GroupMember[] = (g.group_members || []).map((gm: any) => ({
-          id: gm.id,
-          userId: gm.user_id,
-          role: gm.role,
-          name: gm.profiles?.name || 'Member',
-          email: gm.profiles?.email || '',
-          avatar: gm.profiles?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-          initials: gm.profiles?.initials || 'M',
-        }));
+        const members: GroupMember[] = (g.group_members || []).map((gm: any) => {
+          const isRegistered = Boolean(gm.profiles);
+          const name = isRegistered
+            ? gm.profiles?.name || 'Member'
+            : gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Invited Member');
+          const email = isRegistered ? gm.profiles?.email || '' : gm.invited_email || '';
+          const avatar = isRegistered
+            ? gm.profiles?.avatar ||
+              'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'
+            : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
+          const initials = isRegistered
+            ? gm.profiles?.initials || name.slice(0, 2).toUpperCase()
+            : name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+
+          return {
+            id: gm.id,
+            userId: gm.user_id || gm.id,
+            role: gm.role || 'member',
+            name,
+            email,
+            avatar,
+            initials,
+          };
+        });
         return mapGroupFromDb(g, members);
       });
     } catch (err) {
       console.error('Failed to get groups:', err);
       return [];
+    }
+  },
+
+  async getGroupById(groupId: string): Promise<Group | null> {
+    if (!isSupabaseConfigured) return null;
+    try {
+      const { data, error } = await supabase
+        .from('groups')
+        .select(`
+          *,
+          creator:created_by ( id, name, email ),
+          group_members (
+            id,
+            user_id,
+            role,
+            invited_name,
+            invited_email,
+            profiles ( id, name, email, avatar, initials )
+          )
+        `)
+        .eq('id', groupId)
+        .single();
+
+      if (error || !data) return null;
+
+      const members: GroupMember[] = (data.group_members || []).map((gm: any) => {
+        const isRegistered = Boolean(gm.profiles);
+        const name = isRegistered
+          ? gm.profiles?.name || 'Member'
+          : gm.invited_name || (gm.invited_email ? gm.invited_email.split('@')[0] : 'Invited Member');
+        const email = isRegistered ? gm.profiles?.email || '' : gm.invited_email || '';
+        const avatar = isRegistered
+          ? gm.profiles?.avatar ||
+            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'
+          : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80';
+        const initials = isRegistered
+          ? gm.profiles?.initials || name.slice(0, 2).toUpperCase()
+          : name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
+
+        return {
+          id: gm.id,
+          userId: gm.user_id || gm.id,
+          role: gm.role || 'member',
+          name,
+          email,
+          avatar,
+          initials,
+        };
+      });
+
+      return mapGroupFromDb(data, members);
+    } catch (err) {
+      console.error('getGroupById error:', err);
+      return null;
     }
   },
 
@@ -180,6 +287,51 @@ export const supabaseApi = {
       ];
       const cover_gradient = gradientOptions[Math.floor(Math.random() * gradientOptions.length)];
 
+      // 1. Attempt Atomic RPC first for full transactional safety
+      const { data: rpcGroup, error: rpcErr } = await supabase.rpc('create_group_with_creator', {
+        p_name: data.name.trim(),
+        p_description: data.description?.trim() || '',
+        p_currency: (data.currency || 'LKR').toUpperCase(),
+        p_category: data.category || 'trip',
+        p_cover_gradient: cover_gradient,
+        p_member_names: data.memberNames || [],
+      });
+
+      if (!rpcErr && rpcGroup) {
+        // Fetch freshly created group with members
+        const { data: freshGroup } = await supabase
+          .from('groups')
+          .select(`
+            *,
+            creator:created_by ( id, name, email ),
+            group_members (
+              id,
+              user_id,
+              role,
+              invited_name,
+              invited_email,
+              profiles ( id, name, email, avatar, initials )
+            )
+          `)
+          .eq('id', rpcGroup.id)
+          .single();
+
+        if (freshGroup) {
+          const members: GroupMember[] = (freshGroup.group_members || []).map((gm: any) => ({
+            id: gm.id,
+            userId: gm.user_id || gm.id,
+            role: gm.role,
+            name: gm.profiles?.name || gm.invited_name || 'Member',
+            email: gm.profiles?.email || gm.invited_email || '',
+            avatar: gm.profiles?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+            initials: gm.profiles?.initials || 'M',
+          }));
+          return mapGroupFromDb(freshGroup, members);
+        }
+        return mapGroupFromDb(rpcGroup, []);
+      }
+
+      // 2. Direct Supabase insert fallback
       const { data: newGroup, error: groupErr } = await supabase
         .from('groups')
         .insert({
@@ -200,6 +352,43 @@ export const supabaseApi = {
         group_id: newGroup.id,
         user_id: data.userId,
         role: 'admin',
+      });
+
+      // Add initial invited members if provided
+      if (Array.isArray(data.memberNames) && data.memberNames.length > 0) {
+        for (const mName of data.memberNames) {
+          const clean = mName.trim();
+          if (clean && clean !== data.userId) {
+            // Check if profile exists
+            const { data: existingProfile } = await supabase
+              .from('profiles')
+              .select('id, name, email')
+              .or(`email.ilike.${clean},name.ilike.${clean}`)
+              .maybeSingle();
+
+            if (existingProfile && existingProfile.id !== data.userId) {
+              await supabase.from('group_members').insert({
+                group_id: newGroup.id,
+                user_id: existingProfile.id,
+                role: 'member',
+              });
+            } else {
+              await supabase.from('group_members').insert({
+                group_id: newGroup.id,
+                invited_name: clean,
+                role: 'member',
+              });
+            }
+          }
+        }
+      }
+
+      // Log group created activity
+      await supabase.from('activities').insert({
+        group_id: newGroup.id,
+        type: 'group_created',
+        actor_name: 'You',
+        description: `created group "${newGroup.name}"`,
       });
 
       return mapGroupFromDb(newGroup, []);
@@ -237,6 +426,122 @@ export const supabaseApi = {
     } catch (err) {
       console.error('deleteGroup error:', err);
       return false;
+    }
+  },
+
+  async addMemberToGroup(
+    groupId: string,
+    name: string,
+    email?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!isSupabaseConfigured) return { success: false, error: 'Supabase not configured' };
+    try {
+      const cleanName = name.trim();
+      const cleanEmail = email?.trim().toLowerCase();
+
+      if (!cleanName && !cleanEmail) {
+        return { success: false, error: 'Member name or email is required.' };
+      }
+
+      // 1. Check if a profile matches the email or name
+      let matchedProfile: any = null;
+      if (cleanEmail) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id, name, email')
+          .eq('email', cleanEmail)
+          .maybeSingle();
+        matchedProfile = prof;
+      }
+
+      // 2. Prevent duplicate membership check
+      if (matchedProfile) {
+        const { data: existing } = await supabase
+          .from('group_members')
+          .select('id')
+          .eq('group_id', groupId)
+          .eq('user_id', matchedProfile.id)
+          .maybeSingle();
+
+        if (existing) {
+          return { success: false, error: 'This user is already a member of this group.' };
+        }
+
+        const { error: insertErr } = await supabase.from('group_members').insert({
+          group_id: groupId,
+          user_id: matchedProfile.id,
+          role: 'member',
+        });
+
+        if (insertErr) throw insertErr;
+      } else {
+        // Check duplicate by invited_email
+        if (cleanEmail) {
+          const { data: existingInv } = await supabase
+            .from('group_members')
+            .select('id')
+            .eq('group_id', groupId)
+            .ilike('invited_email', cleanEmail)
+            .maybeSingle();
+
+          if (existingInv) {
+            return { success: false, error: 'An invitation has already been added with this email.' };
+          }
+        }
+
+        // Insert as invited guest (without fake auth user ID)
+        const { error: invErr } = await supabase.from('group_members').insert({
+          group_id: groupId,
+          invited_name: cleanName || cleanEmail?.split('@')[0] || 'Guest',
+          invited_email: cleanEmail || null,
+          role: 'member',
+        });
+
+        if (invErr) throw invErr;
+      }
+
+      // 3. Log activity
+      await supabase.from('activities').insert({
+        group_id: groupId,
+        type: 'member_added',
+        actor_name: 'Admin',
+        description: `added ${cleanName || cleanEmail} to the group`,
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('addMemberToGroup error:', err);
+      return { success: false, error: err.message || 'Failed to add member' };
+    }
+  },
+
+  async removeMemberFromGroup(
+    groupId: string,
+    memberId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!isSupabaseConfigured) return { success: false, error: 'Supabase not configured' };
+    try {
+      // Look up member by row id or user_id
+      const { error } = await supabase
+        .from('group_members')
+        .delete()
+        .eq('group_id', groupId)
+        .or(`id.eq.${memberId},user_id.eq.${memberId}`);
+
+      if (error) throw error;
+
+      // Log activity
+      await supabase.from('activities').insert({
+        group_id: groupId,
+        type: 'member_added',
+        actor_name: 'Admin',
+        description: 'removed a member from the group',
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('removeMemberFromGroup error:', err);
+      return { success: false, error: err.message || 'Failed to remove member' };
     }
   },
 

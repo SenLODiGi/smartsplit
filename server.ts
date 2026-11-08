@@ -943,8 +943,32 @@ app.post('/api/expenses', (req, res) => {
     notes,
   } = req.body;
 
-  const group = groups.find((g) => g.id === groupId);
-  if (!group) return res.status(404).json({ error: 'Group not found' });
+  let group = groups.find((g) => g.id === groupId);
+  if (!group) {
+    group = {
+      id: groupId,
+      name: 'Expense Group',
+      description: 'Active Group',
+      currency: currency || 'LKR',
+      category: 'other',
+      members: [
+        {
+          id: payerId || currentUser.id,
+          userId: payerId || currentUser.id,
+          name: currentUser.name || 'Member',
+          email: currentUser.email || '',
+          avatar: currentUser.avatar,
+          initials: currentUser.initials,
+          role: 'admin',
+        },
+      ],
+      totalSpend: 0,
+      expensesCount: 0,
+      userNetBalance: 0,
+      createdAt: new Date().toISOString(),
+    };
+    groups.push(group);
+  }
 
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) {
@@ -1107,8 +1131,32 @@ app.post('/api/settlements/payments', (req, res) => {
     referenceNote,
   } = req.body;
 
-  const group = groups.find((g) => g.id === groupId);
-  if (!group) return res.status(404).json({ error: 'Group not found' });
+  let group = groups.find((g) => g.id === groupId);
+  if (!group) {
+    group = {
+      id: groupId,
+      name: 'Expense Group',
+      description: 'Active Group',
+      currency: currency || 'LKR',
+      category: 'other',
+      members: [
+        {
+          id: payerId || currentUser.id,
+          userId: payerId || currentUser.id,
+          name: currentUser.name || 'Member',
+          email: currentUser.email || '',
+          avatar: currentUser.avatar,
+          initials: currentUser.initials,
+          role: 'admin',
+        },
+      ],
+      totalSpend: 0,
+      expensesCount: 0,
+      userNetBalance: 0,
+      createdAt: new Date().toISOString(),
+    };
+    groups.push(group);
+  }
 
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) {

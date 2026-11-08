@@ -1028,6 +1028,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await refreshData();
           showToast(`Expense "${updated.title}" updated successfully!`, 'success');
           return updated;
+        } else {
+          showToast('Failed to update expense. Please check your fields.', 'error');
+          return null;
         }
       }
 
@@ -1055,11 +1058,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const deleteExpense = async (expenseId: string): Promise<boolean> => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {
-        const ok = await supabaseApi.deleteExpense(expenseId);
+        const ok = await supabaseApi.deleteExpense(expenseId, currentGroupId);
         if (ok) {
           await refreshData();
           showToast('Expense deleted successfully.', 'info');
           return true;
+        } else {
+          showToast('Failed to delete expense.', 'error');
+          return false;
         }
       }
 
@@ -1095,6 +1101,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           await refreshData();
           showToast(`Settlement recorded! ${sbPayment.payerName} → ${sbPayment.payeeName}`, 'success');
           return sbPayment;
+        } else {
+          showToast('Failed to record settlement. Please verify fields.', 'error');
+          return null;
         }
       }
 

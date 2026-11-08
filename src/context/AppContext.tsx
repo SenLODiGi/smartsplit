@@ -672,7 +672,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (ok) {
           await refreshData();
           showToast('Group details updated successfully!', 'success');
-          return activeGroup || null;
+          const updated = await supabaseApi.getGroupById(groupId);
+          return updated;
         }
       }
 
@@ -726,6 +727,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const addMemberToGroup = async (groupId: string, name: string, email?: string): Promise<boolean> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const res = await supabaseApi.addMemberToGroup(groupId, name, email);
+        if (res.success) {
+          await refreshData();
+          showToast(`${name || email} added to the group!`, 'success');
+          return true;
+        } else {
+          showToast(res.error || 'Failed to add member.', 'error');
+          return false;
+        }
+      }
+
       const res = await fetch(`/api/groups/${groupId}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -751,6 +764,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     memberId: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
+      if (isSupabaseConfigured && !isDemoMode) {
+        const res = await supabaseApi.removeMemberFromGroup(groupId, memberId);
+        if (res.success) {
+          await refreshData();
+          showToast('Member removed from group.', 'info');
+          return { success: true };
+        } else {
+          showToast(res.error || 'Failed to remove member.', 'error');
+          return { success: false, error: res.error };
+        }
+      }
+
       const res = await fetch(`/api/groups/${groupId}/members/${memberId}`, { method: 'DELETE' });
       const json = await res.json().catch(() => ({}));
       if (res.ok) {

@@ -11,7 +11,7 @@ export const CreateGroupPage: React.FC = () => {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<'trip' | 'home' | 'dinner' | 'event' | 'other'>('trip');
   const [currency, setCurrency] = useState('LKR');
-  const [members, setMembers] = useState<string[]>(['Dilshan Silva', 'Anuki Fernando']);
+  const [members, setMembers] = useState<string[]>([]);
   const [newMemberInput, setNewMemberInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -154,7 +154,7 @@ export const CreateGroupPage: React.FC = () => {
                   handleAddMember();
                 }
               }}
-              placeholder="Friend's name (e.g. Praveen Jayawardena)"
+              placeholder="Friend's name or email (e.g. Praveen or praveen@example.com)"
               className="flex-1 text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
             />
             <button

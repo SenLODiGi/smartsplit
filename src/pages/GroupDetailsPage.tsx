@@ -117,6 +117,11 @@ export const GroupDetailsPage: React.FC = () => {
 
   const totalSpend = groupExpenses.reduce((sum, e) => sum + e.amount, 0);
 
+  const isCreatorOrAdmin = Boolean(
+    group.createdBy === currentUser.id ||
+      group.members.some((m) => m.userId === currentUser.id && m.role === 'admin')
+  );
+
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMemberName.trim()) {
@@ -157,6 +162,7 @@ export const GroupDetailsPage: React.FC = () => {
   const handleDeleteGroupConfirm = async () => {
     const success = await deleteGroup(group.id);
     if (success) {
+      setShowDeleteGroupModal(false);
       navigate('/groups');
     }
   };
@@ -248,6 +254,15 @@ export const GroupDetailsPage: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1 max-w-xl">
               {group.description || 'Shared expense tracking.'}
             </p>
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1.5 flex-wrap">
+              <span>
+                Created by <strong className="text-slate-600 font-semibold">{group.creatorName || 'Admin'}</strong>
+              </span>
+              <span>•</span>
+              <span>{formatDate(group.createdAt)}</span>
+              <span>•</span>
+              <span className="capitalize">{group.category || 'trip'}</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -445,23 +460,25 @@ export const GroupDetailsPage: React.FC = () => {
               <h2 className="text-sm font-bold text-slate-900">Group Members</h2>
               <p className="text-[11px] text-slate-500">People involved in splitting expenses</p>
             </div>
-            <button
-              onClick={() => setShowInviteModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors"
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>Add Member</span>
-            </button>
+            {isCreatorOrAdmin && (
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Add Member</span>
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {group.members.map((m) => {
               const isCurrentUser = m.userId === currentUser.id;
-              const canRemove = !isCurrentUser || group.members.length === 1;
+              const canRemove = isCreatorOrAdmin ? (!isCurrentUser || group.members.length === 1) : isCurrentUser;
 
               return (
                 <div
-                  key={m.userId}
+                  key={m.id || m.userId}
                   className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between"
                 >
                   <div className="flex items-center gap-2.5">
@@ -482,9 +499,9 @@ export const GroupDetailsPage: React.FC = () => {
                     </span>
                     {canRemove && (
                       <button
-                        onClick={() => handleRemoveMember(m.userId, m.name)}
-                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
-                        title="Remove member"
+                        onClick={() => handleRemoveMember(m.id || m.userId, m.name)}
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                        title={isCurrentUser ? 'Leave group' : 'Remove member'}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -567,16 +584,20 @@ export const GroupDetailsPage: React.FC = () => {
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEditGroupModal(false);
-                    setShowDeleteGroupModal(true);
-                  }}
-                  className="text-rose-600 hover:text-rose-700 font-semibold"
-                >
-                  Delete Group
-                </button>
+                {isCreatorOrAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEditGroupModal(false);
+                      setShowDeleteGroupModal(true);
+                    }}
+                    className="text-rose-600 hover:text-rose-700 font-semibold cursor-pointer"
+                  >
+                    Delete Group
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-slate-400 italic">Admin only: Delete Group</span>
+                )}
 
                 <div className="flex gap-2">
                   <button

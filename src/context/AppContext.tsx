@@ -217,7 +217,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const initAuth = async () => {
       try {
         if (!isSupabaseConfigured) {
-          const wasInDemo = localStorage.getItem('smartsplit_demo_mode') === 'true';
+          let wasInDemo = false;
+          try {
+            wasInDemo = localStorage.getItem('smartsplit_demo_mode') === 'true';
+          } catch {}
+
           if (isMounted) {
             setIsAuthenticated(wasInDemo);
             setIsDemoMode(wasInDemo);
@@ -226,10 +230,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           return;
         }
 
+        // Add 3.5s timeout race to guarantee getSession never hangs indefinitely
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null }; error: Error }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null }, error: new Error('Session check timeout') }), 3500)
+        );
+
         const {
           data: { session },
           error,
-        } = await supabase.auth.getSession();
+        } = await Promise.race([sessionPromise, timeoutPromise]);
 
         if (error) {
           console.warn('Supabase getSession notice:', error.message);
@@ -269,6 +279,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     initAuth();
+
+    if (!isSupabaseConfigured) {
+      return () => {
+        isMounted = false;
+      };
+    }
 
     const {
       data: { subscription },

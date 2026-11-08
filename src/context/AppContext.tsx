@@ -516,7 +516,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } finally {
       setIsAuthenticated(false);
       setIsDemoMode(false);
-      setCurrentUser(defaultUser);
+      setCurrentUser(emptyUser);
+      setGroups([]);
+      setCurrentGroupId('');
+      setExpenses([]);
+      setActivities([]);
+      setNotifications([]);
+      setSettlements([]);
       setIsLoading(false);
       showToast('You have been logged out.', 'info');
     }
@@ -566,6 +572,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCurrentUser(resolvedUser);
         setIsAuthenticated(true);
         setIsDemoMode(false);
+        await refreshData(resolvedUser.id);
         showToast(`Welcome back, ${resolvedUser.name}!`, 'success');
         return { success: true };
       }
@@ -644,6 +651,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCurrentUser(resolvedUser);
         setIsAuthenticated(true);
         setIsDemoMode(false);
+        await refreshData(resolvedUser.id);
         showToast(`Account created! Welcome to SmartSplit, ${cleanName}!`, 'success');
         return { success: true, confirmationRequired: false };
       }
@@ -696,22 +704,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }): Promise<Group | null> => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {
-        const created = await supabaseApi.createGroup({
-          ...data,
-          userId: currentUser.id,
-        });
-        if (created) {
-          await refreshData();
-          setCurrentGroupId(created.id);
-          showToast(`Group "${created.name}" created successfully!`, 'success');
-          return created;
+        // Direct verification of auth user
+        const { data: authData } = await supabase.auth.getUser();
+        const currentAuthUser = authData?.user;
+        const verifiedUserId = currentAuthUser?.id || (currentUser.id && currentUser.id !== 'usr_kasun' ? currentUser.id : null);
+
+        if (verifiedUserId) {
+          const created = await supabaseApi.createGroup({
+            ...data,
+            userId: verifiedUserId,
+          });
+          if (created) {
+            await refreshData(verifiedUserId);
+            setCurrentGroupId(created.id);
+            showToast(`Group "${created.name}" created successfully!`, 'success');
+            return created;
+          }
         }
       }
+
+      const creatorPayload = {
+        id: currentUser.id || 'usr_demo',
+        name: currentUser.name || 'Admin',
+        email: currentUser.email || '',
+        avatar: currentUser.avatar,
+        initials: currentUser.initials,
+      };
 
       const res = await fetch('/api/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          creator: creatorPayload,
+          userId: currentUser.id,
+        }),
       });
       if (res.ok) {
         const json = await res.json();
@@ -1039,13 +1066,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateCurrentUserProfile = async (data: { name?: string; email?: string }): Promise<boolean> => {
     try {
       if (isSupabaseConfigured && !isDemoMode) {
-        const { error } = await supabase
+        const updatePayload: any = {};
+        if (data.name) {
+          updatePayload.name = data.name;
+          updatePayload.full_name = data.name;
+        }
+        if (data.email) updatePayload.email = data.email;
+
+        let { error } = await supabase
           .from('profiles')
-          .update({
-            name: data.name,
-            email: data.email,
-          })
+          .update(updatePayload)
           .eq('id', currentUser.id);
+
+        if (error && error.message?.toLowerCase().includes('column')) {
+          // Schema column fallback: try with full_name only
+          const fallbackPayload: any = {};
+          if (data.name) fallbackPayload.full_name = data.name;
+          if (data.email) fallbackPayload.email = data.email;
+          const retry = await supabase.from('profiles').update(fallbackPayload).eq('id', currentUser.id);
+          error = retry.error;
+        }
+
+        // Also sync auth user metadata
+        if (data.name) {
+          await supabase.auth.updateUser({
+            data: { name: data.name, full_name: data.name },
+          }).catch(() => {});
+        }
 
         if (!error) {
           setCurrentUser((prev) => ({

@@ -33,13 +33,35 @@ export function calculateGroupBalancesAndOptimization(
 
   // 1. Process expenses
   for (const exp of groupExpenses) {
-    const payer = balanceMap.get(exp.payerId);
-    if (payer) {
-      payer.net += exp.amount;
+    if (exp.payers && Array.isArray(exp.payers) && exp.payers.length > 0) {
+      for (const p of exp.payers) {
+        let payer = balanceMap.get(p.userId);
+        if (!payer) {
+          const entry = Array.from(balanceMap.values()).find(
+            (val) => val.name.toLowerCase() === p.userName.toLowerCase()
+          );
+          if (entry) payer = entry;
+        }
+        if (payer) {
+          payer.net += Number(p.amount) || 0;
+        }
+      }
+    } else {
+      const payer = balanceMap.get(exp.payerId);
+      if (payer) {
+        payer.net += exp.amount;
+      }
     }
+
     if (exp.splits && Array.isArray(exp.splits)) {
       for (const split of exp.splits) {
-        const debtor = balanceMap.get(split.userId);
+        let debtor = balanceMap.get(split.userId);
+        if (!debtor) {
+          const entry = Array.from(balanceMap.values()).find(
+            (val) => val.name.toLowerCase() === split.userName.toLowerCase()
+          );
+          if (entry) debtor = entry;
+        }
         if (debtor) {
           debtor.net -= split.amount;
         }
@@ -89,9 +111,19 @@ export function calculateGroupBalancesAndOptimization(
   let simulatedRawDebts = 0;
   for (const exp of groupExpenses) {
     if (exp.splits && Array.isArray(exp.splits)) {
+      const payersList =
+        exp.payers && exp.payers.length > 0
+          ? exp.payers
+          : [{ userId: exp.payerId, userName: exp.payerName, amount: exp.amount }];
+
       for (const split of exp.splits) {
-        if (split.userId !== exp.payerId && split.amount > 0) {
-          simulatedRawDebts++;
+        if (split.amount > 0) {
+          for (const p of payersList) {
+            if (p.userId !== split.userId && p.amount > 0) {
+              simulatedRawDebts++;
+              break;
+            }
+          }
         }
       }
     }

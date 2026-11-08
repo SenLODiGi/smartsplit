@@ -51,6 +51,13 @@ export interface ExpenseItem {
   confidence?: number;
 }
 
+export interface ExpensePayment {
+  id?: string;
+  userId: string;
+  userName: string;
+  amount: number;
+}
+
 export interface Expense {
   id: string;
   groupId: string;
@@ -60,6 +67,7 @@ export interface Expense {
   category: 'food' | 'transport' | 'lodging' | 'entertainment' | 'utilities' | 'other';
   payerId: string;
   payerName: string;
+  payers?: ExpensePayment[];
   date: string;
   splitMethod: 'equal' | 'exact' | 'percentage' | 'shares' | 'items';
   splits: ExpenseSplit[];

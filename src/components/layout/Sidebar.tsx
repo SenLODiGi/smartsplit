@@ -12,11 +12,12 @@ import {
   Sparkles,
   ArrowRightLeft,
   ChevronDown,
+  LogOut,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export const Sidebar: React.FC = () => {
-  const { groups, currentGroupId, setCurrentGroupId, currentUser } = useApp();
+  const { groups, currentGroupId, setCurrentGroupId, currentUser, logout } = useApp();
   const navigate = useNavigate();
 
   const navItems = [
@@ -119,19 +120,30 @@ export const Sidebar: React.FC = () => {
       </div>
 
       {/* User Profile Footer */}
-      <NavLink
-        to="/settings"
-        className="p-3 border-t border-slate-800 flex items-center gap-3 bg-slate-900/50 hover:bg-slate-800/80 transition-colors cursor-pointer"
-        title="Settings & Profile"
-      >
-        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-indigo-500/30 shrink-0">
-          {currentUser.initials}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-white truncate">{currentUser.name}</p>
-          <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
-        </div>
-      </NavLink>
+      <div className="p-3 border-t border-slate-800 flex items-center justify-between gap-2 bg-slate-900/50">
+        <NavLink
+          to="/settings"
+          className="flex items-center gap-2.5 min-w-0 flex-1 hover:opacity-85 transition-opacity"
+          title="Settings & Profile"
+        >
+          <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-indigo-500/30 shrink-0">
+            {currentUser.initials}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-white truncate">{currentUser.name}</p>
+            <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
+          </div>
+        </NavLink>
+
+        <button
+          type="button"
+          onClick={() => logout()}
+          className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 rounded-lg transition-colors shrink-0"
+          title="Sign Out"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
+      </div>
     </aside>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RotateCcw, Check, User, Globe, Sparkles, AlertTriangle, X } from 'lucide-react';
+import { RotateCcw, Check, User, Globe, Sparkles, AlertTriangle, X, LogOut } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const SettingsPage: React.FC = () => {
@@ -9,6 +9,7 @@ export const SettingsPage: React.FC = () => {
     setPreferredCurrency,
     resetDemoDatabase,
     updateCurrentUserProfile,
+    logout,
     showToast,
   } = useApp();
 
@@ -199,6 +200,22 @@ export const SettingsPage: React.FC = () => {
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset Demo Database</span>
+          </button>
+        </div>
+
+        {/* Account Session & Sign Out */}
+        <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800">Account Session</h3>
+            <p className="text-[11px] text-slate-500">Sign out of your active SmartSplit session.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
           </button>
         </div>
 

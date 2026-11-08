@@ -24,6 +24,10 @@ export const AuthPage: React.FC = () => {
         if (signUpWithEmail) {
           const res = await signUpWithEmail(email, password, name);
           if (res.success) {
+            if (res.confirmationRequired) {
+              setMode('login');
+              return;
+            }
             navigate('/onboarding');
             return;
           }

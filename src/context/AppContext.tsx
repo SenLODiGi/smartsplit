@@ -546,11 +546,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
 
       if (error) {
-        const friendlyMessage = error.message.toLowerCase().includes('already registered')
-          ? 'An account with this email already exists. Please sign in.'
-          : error.message;
+        let friendlyMessage = error.message;
+        if (error.message.toLowerCase().includes('already registered')) {
+          friendlyMessage = 'An account with this email already exists. Please sign in.';
+        } else if (error.message.toLowerCase().includes('rate limit')) {
+          friendlyMessage = 'Supabase email limit reached (free tier allows only 3 emails/hour). Please turn off "Confirm email" in Supabase Dashboard to register instantly without rate limits.';
+        }
 
-        showToast(friendlyMessage, 'error');
+        showToast(friendlyMessage, 'error', 7000);
         return { success: false, error: friendlyMessage };
       }
 

@@ -20,6 +20,7 @@ export const Topbar: React.FC = () => {
     markNotificationRead,
     markAllNotificationsRead,
     resetDemoDatabase,
+    openGroupSelector,
   } = useApp();
 
   const [showNotifMenu, setShowNotifMenu] = useState(false);
@@ -27,6 +28,22 @@ export const Topbar: React.FC = () => {
   const navigate = useNavigate();
 
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const handleScanReceiptClick = () => {
+    if (!activeGroup) {
+      openGroupSelector('/receipt/pipeline', 'scanning a receipt');
+    } else {
+      navigate('/receipt/pipeline');
+    }
+  };
+
+  const handleAddExpenseClick = () => {
+    if (!activeGroup) {
+      openGroupSelector('/expenses/add', 'adding an expense');
+    } else {
+      navigate('/expenses/add');
+    }
+  };
 
   // Close notifications menu when clicking outside
   useEffect(() => {
@@ -53,10 +70,17 @@ export const Topbar: React.FC = () => {
             <h1 className="text-sm lg:text-base font-bold text-slate-900 truncate">
               {activeGroup ? activeGroup.name : 'SmartSplit'}
             </h1>
-            {activeGroup && (
+            {activeGroup ? (
               <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 uppercase">
                 {activeGroup.currency}
               </span>
+            ) : (
+              <button
+                onClick={() => openGroupSelector(undefined, 'selecting workspace')}
+                className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-0.5 rounded-md transition-colors"
+              >
+                Select Group
+              </button>
             )}
           </div>
           <p className="text-xs text-slate-500 hidden sm:block truncate">
@@ -86,7 +110,7 @@ export const Topbar: React.FC = () => {
 
         {/* Scan Receipt Quick CTA */}
         <button
-          onClick={() => navigate('/receipt/pipeline')}
+          onClick={handleScanReceiptClick}
           className="hidden md:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors"
         >
           <ScanLine className="w-3.5 h-3.5" />
@@ -95,7 +119,7 @@ export const Topbar: React.FC = () => {
 
         {/* Add Expense Primary CTA */}
         <button
-          onClick={() => navigate('/expenses/add')}
+          onClick={handleAddExpenseClick}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs"
         >
           <Plus className="w-3.5 h-3.5" />

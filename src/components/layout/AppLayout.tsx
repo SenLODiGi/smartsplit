@@ -3,6 +3,7 @@ import { Outlet, Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { MobileNav } from './MobileNav';
+import { GroupSelectionModal } from '../common/GroupSelectionModal';
 import { useApp } from '../../context/AppContext';
 
 export const AppLayout: React.FC = () => {
@@ -36,6 +37,7 @@ export const AppLayout: React.FC = () => {
         </main>
         <MobileNav />
       </div>
+      <GroupSelectionModal />
     </div>
   );
 };

@@ -33,10 +33,27 @@ export const DashboardPage: React.FC = () => {
     activities,
     getGroupOptimization,
     preferredCurrency,
+    openGroupSelector,
   } = useApp();
 
   const navigate = useNavigate();
   const [analysis, setAnalysis] = useState<SettlementAnalysis | null>(null);
+
+  const handleScanReceiptClick = () => {
+    if (!activeGroup) {
+      openGroupSelector('/receipt/pipeline', 'scanning a receipt');
+    } else {
+      navigate('/receipt/pipeline');
+    }
+  };
+
+  const handleAddExpenseClick = () => {
+    if (!activeGroup) {
+      openGroupSelector('/expenses/add', 'adding an expense');
+    } else {
+      navigate('/expenses/add');
+    }
+  };
 
   useEffect(() => {
     if (activeGroup) {
@@ -237,7 +254,7 @@ export const DashboardPage: React.FC = () => {
       {/* Quick Action Shortcuts */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <button
-          onClick={() => navigate('/receipt/pipeline')}
+          onClick={handleScanReceiptClick}
           className="p-3.5 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 hover:border-indigo-300 rounded-xl text-left transition-all group"
         >
           <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
@@ -248,7 +265,7 @@ export const DashboardPage: React.FC = () => {
         </button>
 
         <button
-          onClick={() => navigate('/expenses/add')}
+          onClick={handleAddExpenseClick}
           className="p-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-left transition-all group"
         >
           <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center mb-2 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
@@ -288,10 +305,10 @@ export const DashboardPage: React.FC = () => {
           <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
             <div>
               <h2 className="text-sm font-bold text-slate-900">Recent Group Expenses</h2>
-              <p className="text-[11px] text-slate-500">Showing expenses in {activeGroup?.name}</p>
+              <p className="text-[11px] text-slate-500">Showing expenses in {activeGroup?.name || 'SmartSplit'}</p>
             </div>
             <button
-              onClick={() => navigate('/expenses/add')}
+              onClick={handleAddExpenseClick}
               className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
             >
               <span>+ Add New</span>
@@ -302,7 +319,7 @@ export const DashboardPage: React.FC = () => {
             <div className="text-center py-10">
               <p className="text-xs text-slate-400">No expenses recorded in this group yet.</p>
               <button
-                onClick={() => navigate('/expenses/add')}
+                onClick={handleAddExpenseClick}
                 className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold"
               >
                 Add First Expense

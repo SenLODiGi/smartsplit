@@ -34,7 +34,15 @@ interface AppContextType {
   groups: Group[];
   currentGroupId: string;
   setCurrentGroupId: (id: string) => void;
+  selectGroup: (id: string) => void;
   activeGroup: Group | undefined;
+  groupSelector: {
+    isOpen: boolean;
+    targetPath?: string;
+    actionTitle?: string;
+  };
+  openGroupSelector: (targetPath?: string, actionTitle?: string) => void;
+  closeGroupSelector: () => void;
   expenses: Expense[];
   settlements: SettlementPayment[];
   activities: ActivityItem[];
@@ -123,13 +131,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [currentGroupId, setCurrentGroupId] = useState<string>(() => {
+  const [currentGroupId, setCurrentGroupIdState] = useState<string>(() => {
     try {
+      const stored = localStorage.getItem('smartsplit_current_group_id');
+      if (stored) return stored;
       return localStorage.getItem('smartsplit_demo_mode') === 'true' ? 'grp_ella_weekend' : '';
     } catch {
       return '';
     }
   });
+
+  const selectGroup = useCallback((groupId: string) => {
+    setCurrentGroupIdState(groupId);
+    try {
+      if (groupId) {
+        localStorage.setItem('smartsplit_current_group_id', groupId);
+      } else {
+        localStorage.removeItem('smartsplit_current_group_id');
+      }
+    } catch {}
+  }, []);
+
+  const setCurrentGroupId = selectGroup;
+
+  // Global Group Selection Modal state
+  const [groupSelector, setGroupSelector] = useState<{
+    isOpen: boolean;
+    targetPath?: string;
+    actionTitle?: string;
+  }>({
+    isOpen: false,
+    targetPath: undefined,
+    actionTitle: undefined,
+  });
+
+  const openGroupSelector = useCallback((targetPath?: string, actionTitle?: string) => {
+    setGroupSelector({
+      isOpen: true,
+      targetPath,
+      actionTitle,
+    });
+  }, []);
+
+  const closeGroupSelector = useCallback(() => {
+    setGroupSelector((prev) => ({ ...prev, isOpen: false }));
+  }, []);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [settlements, setSettlements] = useState<SettlementPayment[]>([]);
   const [activities, setActivities] = useState<ActivityItem[]>([]);
@@ -176,7 +222,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     progress: { status: 'Ready', progress: 0 },
   });
 
-  const activeGroup = groups.find((g) => g.id === currentGroupId) || groups[0];
+  const activeGroup = groups.find((g) => g.id === currentGroupId);
 
   // ============================================================================
   // HELPER: SYNC USER PROFILE FROM SUPABASE
@@ -229,16 +275,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
         if (upsertErr && upsertErr.message?.toLowerCase().includes('column')) {
           // Fallback if schema uses name / avatar instead of full_name / avatar_url
-          await supabase.from('profiles').upsert(
-            {
-              id: sessionUser.id,
-              name,
-              email: sessionUser.email,
-              avatar,
-              initials,
-            },
-            { onConflict: 'id' }
-          ).catch(() => {});
+          try {
+            await supabase.from('profiles').upsert(
+              {
+                id: sessionUser.id,
+                name,
+                email: sessionUser.email,
+                avatar,
+                initials,
+              },
+              { onConflict: 'id' }
+            );
+          } catch {}
         }
       }
     } catch (err) {
@@ -408,12 +456,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         loadedSettlements = sbStls || [];
 
         setGroups(loadedGroups);
-        if (loadedGroups.length > 0) {
-          if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
-            setCurrentGroupId(loadedGroups[0].id);
-          }
+        let storedId = '';
+        try {
+          storedId = localStorage.getItem('smartsplit_current_group_id') || '';
+        } catch {}
+
+        if (storedId && loadedGroups.some((g: Group) => g.id === storedId)) {
+          selectGroup(storedId);
+        } else if (currentGroupId && loadedGroups.some((g: Group) => g.id === currentGroupId)) {
+          selectGroup(currentGroupId);
         } else {
-          setCurrentGroupId('');
+          selectGroup('');
         }
       } else {
         // 2. In Demo Mode, load the rich seed dataset
@@ -430,10 +483,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         loadedSettlements = stlRes.settlements || [];
 
         setGroups(loadedGroups);
-        if (loadedGroups.length > 0) {
-          if (!loadedGroups.some((g: Group) => g.id === currentGroupId)) {
-            setCurrentGroupId(loadedGroups[0].id);
-          }
+        let storedId = '';
+        try {
+          storedId = localStorage.getItem('smartsplit_current_group_id') || '';
+        } catch {}
+
+        if (storedId && loadedGroups.some((g: Group) => g.id === storedId)) {
+          selectGroup(storedId);
+        } else if (currentGroupId && loadedGroups.some((g: Group) => g.id === currentGroupId)) {
+          selectGroup(currentGroupId);
+        } else if (loadedGroups.length > 0) {
+          selectGroup(loadedGroups[0].id);
         }
       }
 
@@ -441,8 +501,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setNotifications(loadedNotifications);
       setSettlements(loadedSettlements);
 
-      // Fetch expenses for the current active group
-      const targetGroupId = currentGroupId || (loadedGroups[0]?.id ?? '');
+      // Fetch expenses for the current active group if one is selected
+      let targetGroupId = '';
+      try {
+        targetGroupId = localStorage.getItem('smartsplit_current_group_id') || '';
+      } catch {}
+      if (!targetGroupId || !loadedGroups.some((g: Group) => g.id === targetGroupId)) {
+        targetGroupId = currentGroupId && loadedGroups.some((g: Group) => g.id === currentGroupId) ? currentGroupId : '';
+      }
+
       if (targetGroupId) {
         if (isSupabaseConfigured && !isDemoMode) {
           const sbExpenses = await supabaseApi.getExpenses(targetGroupId);
@@ -507,6 +574,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setIsLoading(true);
       try {
         localStorage.removeItem('smartsplit_demo_mode');
+        localStorage.removeItem('smartsplit_current_group_id');
       } catch {}
       if (isSupabaseConfigured) {
         await supabase.auth.signOut();
@@ -518,7 +586,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setIsDemoMode(false);
       setCurrentUser(emptyUser);
       setGroups([]);
-      setCurrentGroupId('');
+      selectGroup('');
       setExpenses([]);
       setActivities([]);
       setNotifications([]);
@@ -908,9 +976,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // ============================================================================
   const createExpense = async (expenseData: any): Promise<Expense | null> => {
     try {
+      const targetGroupId = expenseData.groupId || currentGroupId;
+      if (!targetGroupId) {
+        showToast('Please select an active expense group first.', 'warning');
+        return null;
+      }
+
       const payload = {
         ...expenseData,
-        groupId: expenseData.groupId || currentGroupId,
+        groupId: targetGroupId,
       };
 
       if (isSupabaseConfigured && !isDemoMode) {
@@ -1223,7 +1297,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
           const { processedDataUrl } = await preprocessReceiptImage(imageBase64);
 
-          const extractedText = await runLocalTesseractOCR(
+          const ocrData = await runLocalTesseractOCR(
             processedDataUrl,
             (status: string, progress: number) => {
               setActiveOCR((prev) => ({
@@ -1233,8 +1307,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             }
           );
 
-          if (extractedText && extractedText.trim().length > 0) {
-            ocrResult = parseReceiptText(extractedText, activeGroup?.currency || 'LKR');
+          if (ocrData && ocrData.text && ocrData.text.trim().length > 0) {
+            ocrResult = parseReceiptText(ocrData.text, activeGroup?.currency || 'LKR', ocrData.lines);
           }
         } catch (tessErr) {
           console.warn('Tesseract OCR notice:', tessErr);
@@ -1356,7 +1430,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         groups,
         currentGroupId,
         setCurrentGroupId,
+        selectGroup,
         activeGroup,
+        groupSelector,
+        openGroupSelector,
+        closeGroupSelector,
         expenses,
         settlements,
         activities,

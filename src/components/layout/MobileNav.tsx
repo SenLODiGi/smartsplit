@@ -7,8 +7,11 @@ import {
   Scale,
   History,
 } from 'lucide-react';
+import { useApp } from '../../context/AppContext';
 
 export const MobileNav: React.FC = () => {
+  const { activeGroup, openGroupSelector } = useApp();
+
   const items = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'Groups', path: '/groups', icon: Users2 },
@@ -25,6 +28,12 @@ export const MobileNav: React.FC = () => {
           <NavLink
             key={item.path}
             to={item.path}
+            onClick={(e) => {
+              if (item.path === '/receipt/pipeline' && !activeGroup) {
+                e.preventDefault();
+                openGroupSelector('/receipt/pipeline', 'scanning a receipt');
+              }
+            }}
             className={({ isActive }) =>
               `flex flex-col items-center justify-center py-1 px-2.5 rounded-lg text-[10px] font-semibold transition-colors ${
                 isActive

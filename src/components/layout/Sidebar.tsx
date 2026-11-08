@@ -17,7 +17,15 @@ import {
 import { useApp } from '../../context/AppContext';
 
 export const Sidebar: React.FC = () => {
-  const { groups, currentGroupId, setCurrentGroupId, currentUser, logout } = useApp();
+  const {
+    groups,
+    currentGroupId,
+    selectGroup,
+    activeGroup,
+    openGroupSelector,
+    currentUser,
+    logout,
+  } = useApp();
   const navigate = useNavigate();
 
   const navItems = [
@@ -59,20 +67,17 @@ export const Sidebar: React.FC = () => {
         <div className="relative">
           <select
             value={currentGroupId}
-            onChange={(e) => setCurrentGroupId(e.target.value)}
+            onChange={(e) => selectGroup(e.target.value)}
             className="w-full appearance-none bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-lg px-3 py-2 text-xs font-medium text-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
           >
-            {groups.length === 0 ? (
-              <option value="" disabled>
-                No groups created yet
+            <option value="" disabled={groups.length === 0}>
+              {groups.length === 0 ? 'No groups created yet' : '-- Select Active Group --'}
+            </option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.currency})
               </option>
-            ) : (
-              groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name} ({g.currency})
-                </option>
-              ))
-            )}
+            ))}
           </select>
           <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3 pointer-events-none" />
         </div>
@@ -86,6 +91,15 @@ export const Sidebar: React.FC = () => {
             <NavLink
               key={item.path}
               to={item.path}
+              onClick={(e) => {
+                if (item.path === '/expenses/add' && !activeGroup) {
+                  e.preventDefault();
+                  openGroupSelector('/expenses/add', 'adding an expense');
+                } else if (item.path === '/receipt/pipeline' && !activeGroup) {
+                  e.preventDefault();
+                  openGroupSelector('/receipt/pipeline', 'scanning a receipt');
+                }
+              }}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                   isActive
@@ -118,7 +132,13 @@ export const Sidebar: React.FC = () => {
           Scan paper receipts or bills to automatically extract line items & tax.
         </p>
         <button
-          onClick={() => navigate('/receipt/pipeline')}
+          onClick={() => {
+            if (!activeGroup) {
+              openGroupSelector('/receipt/pipeline', 'scanning a bill');
+            } else {
+              navigate('/receipt/pipeline');
+            }
+          }}
           className="w-full text-center py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors shadow-sm"
         >
           Scan Bill Now

@@ -924,6 +924,25 @@ export const supabaseApi = {
   async createExpense(expenseData: any): Promise<Expense | null> {
     if (!isSupabaseConfigured) return null;
     try {
+      if (!expenseData.groupId) {
+        throw new Error('A valid expense group must be selected to create an expense.');
+      }
+
+      // Verify that the authenticated user is a verified member of the target group
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user) {
+        const { data: memberRecord, error: memCheckErr } = await supabase
+          .from('group_members')
+          .select('id')
+          .eq('group_id', expenseData.groupId)
+          .eq('user_id', authData.user.id)
+          .maybeSingle();
+
+        if (memCheckErr || !memberRecord) {
+          throw new Error('Security Error: You are not an active member of this expense group.');
+        }
+      }
+
       // 1. Try atomic stored procedure first for 100% transactional safety
       const { data: rpcData, error: rpcErr } = await supabase.rpc('create_complete_expense', {
         p_group_id: expenseData.groupId,
